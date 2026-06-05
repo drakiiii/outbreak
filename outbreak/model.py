@@ -41,6 +41,7 @@ from .epidemiology import (
     icu_death_probability,
     ngm_unit,
     resolve_parameters,
+    restore_array,
     spectral_radius,
     transition_probability,
 )
@@ -419,9 +420,15 @@ class EpidemicModel:
         }
 
     def set_state(self, state: Dict[str, object]) -> None:
-        self.t = int(state["t"])
-        self.cumulative_vaccinated = float(state["cumulative_vaccinated"])
-        for name in ("S", "V", "E", "Ip", "Ia", "Is", "H", "C", "R", "D"):
-            setattr(self, name, np.asarray(state[name], dtype=float))
+        n = self.n_age
+        self.t = max(0, int(state["t"]))
+        self.cumulative_vaccinated = max(0.0, float(state["cumulative_vaccinated"]))
+        # Each compartment has a fixed, configuration-determined shape; enforce
+        # it so a malformed snapshot is rejected here rather than corrupting the
+        # run (susceptible-style pools are per-age; the cascade is per-stratum).
+        for name in ("S", "V", "R", "D"):
+            setattr(self, name, restore_array(state, name, (n,)))
+        for name in ("E", "Ip", "Ia", "Is", "H", "C"):
+            setattr(self, name, restore_array(state, name, (2, n)))
         if state.get("rng") is not None:
             self.rng.bit_generator.state = state["rng"]

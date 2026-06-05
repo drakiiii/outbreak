@@ -156,3 +156,26 @@ def icu_death_probability(icu_occupancy: float, death_rate: np.ndarray, healthca
         mult = 1.0 + share_over * (healthcare.overflow_mortality_multiplier - 1.0)
         death_prob = np.minimum(1.0, death_prob * mult)
     return death_prob, overflow
+
+
+def restore_array(state: dict, name: str, expected_shape, dtype=float) -> np.ndarray:
+    """Coerce a snapshot field into an array of an exact, expected shape.
+
+    Used by the engines' ``set_state`` to safely rehydrate persisted state.
+    Restoring is the one place a model ingests externally-supplied data (a saved
+    or uploaded snapshot), so every field is shape-checked: this rejects
+    malformed or hostile snapshots up front rather than letting a wrong-sized
+    array cause confusing failures (or unbounded work) deep in a later step.
+    """
+    if name not in state:
+        raise ValueError(f"snapshot is missing required field {name!r}")
+    expected_shape = tuple(int(d) for d in expected_shape)
+    try:
+        arr = np.asarray(state[name], dtype=dtype)
+    except (ValueError, TypeError) as exc:  # ragged / non-numeric input
+        raise ValueError(f"snapshot field {name!r} is not a valid array") from exc
+    if arr.shape != expected_shape:
+        raise ValueError(
+            f"snapshot field {name!r} has shape {arr.shape}, expected {expected_shape}"
+        )
+    return arr

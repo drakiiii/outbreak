@@ -1,4 +1,4 @@
-"""The agent-based epidemic engine: an individual-level (microsimulation) model.
+r"""The agent-based epidemic engine: an individual-level (microsimulation) model.
 
 Where :mod:`outbreak.model` tracks *counts* in each compartment, this engine
 tracks every individual as a row in a set of NumPy arrays and advances them one
@@ -52,6 +52,7 @@ from .epidemiology import (
     icu_death_probability,
     ngm_unit,
     resolve_parameters,
+    restore_array,
     spectral_radius,
     transition_probability,
 )
@@ -363,14 +364,32 @@ class AgentModel:
         }
 
     def set_state(self, state: Dict[str, object]) -> None:
-        self.t = int(state["t"])
-        self.cumulative_vaccinated = float(state["cumulative_vaccinated"])
-        self.n_agents = int(state["n_agents"])
-        self.scale = float(state["scale"])
-        self.age = np.asarray(state["age"], dtype=np.int16)
-        self.state = np.asarray(state["state"], dtype=np.int8)
-        self.vacc = np.asarray(state["vacc"], dtype=bool)
-        self.infectivity = np.asarray(state["infectivity"], dtype=float)
+        # The population/agent count is fixed by the (already validated) config
+        # this engine was built from, so the snapshot must match it. Pinning the
+        # length here bounds every restored array to a configuration-sanctioned
+        # size and stops a tampered snapshot from forcing a huge allocation.
+        n = int(state["n_agents"])
+        if n != self.n_agents:
+            raise ValueError(
+                f"snapshot n_agents ({n}) does not match this scenario ({self.n_agents})"
+            )
+        self.t = max(0, int(state["t"]))
+        self.cumulative_vaccinated = max(0.0, float(state["cumulative_vaccinated"]))
+        scale = float(state["scale"])
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError("snapshot scale must be a positive, finite number")
+        self.scale = scale
+
+        age = restore_array(state, "age", (n,), dtype=np.int16)
+        st = restore_array(state, "state", (n,), dtype=np.int8)
+        if age.size and (age.min() < 0 or age.max() >= self.n_age):
+            raise ValueError("snapshot contains out-of-range age groups")
+        if st.size and (st.min() < 0 or st.max() > D):
+            raise ValueError("snapshot contains out-of-range agent states")
+        self.age = age
+        self.state = st
+        self.vacc = restore_array(state, "vacc", (n,), dtype=bool)
+        self.infectivity = restore_array(state, "infectivity", (n,), dtype=float)
         if state.get("rng") is not None:
             self.rng.bit_generator.state = state["rng"]
 

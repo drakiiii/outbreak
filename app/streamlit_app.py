@@ -44,6 +44,11 @@ from outbreak.simulation import RunState, Simulation, run_ensemble
 
 st.set_page_config(page_title="Outbreak — Epidemic Simulator", layout="wide")
 
+# Upper bound on an uploaded snapshot, enforced before parsing. A legitimate
+# snapshot stores only configuration plus per-agent state arrays, so tens of MB
+# is generous; the cap stops a hostile file from exhausting memory in json.load.
+MAX_SNAPSHOT_BYTES = 50_000_000
+
 COMPARTMENT_COLORS = {
     "S": "#4c78a8", "V": "#72b7b2", "E": "#f5c518", "Ip": "#ff9d4e",
     "Ia": "#ffb86b", "Is": "#e45756", "H": "#b279a2", "C": "#8b1a1a",
@@ -436,10 +441,24 @@ def main():
             )
         uploaded = st.file_uploader("Load a run snapshot (JSON)", type="json")
         if uploaded is not None and st.button("Load snapshot"):
-            data = json.load(uploaded)
-            st.session_state.sim = Simulation.from_dict(data)
-            st.session_state.playing = False
-            st.success("Snapshot loaded. Switch to the Simulate tab to continue.")
+            # Treat the upload as untrusted: cap its size before parsing (so a
+            # huge file can't exhaust memory in json.load) and surface any
+            # malformed/inconsistent snapshot as a friendly error rather than an
+            # unhandled traceback. from_dict validates the config and the
+            # engines' set_state shape-check the restored state.
+            if uploaded.size > MAX_SNAPSHOT_BYTES:
+                st.error(
+                    f"File is too large ({uploaded.size / 1e6:.1f} MB); the limit "
+                    f"is {MAX_SNAPSHOT_BYTES // 1_000_000} MB."
+                )
+            else:
+                try:
+                    data = json.loads(uploaded.getvalue().decode("utf-8"))
+                    st.session_state.sim = Simulation.from_dict(data)
+                    st.session_state.playing = False
+                    st.success("Snapshot loaded. Switch to the Simulate tab to continue.")
+                except (ValueError, KeyError, TypeError, UnicodeDecodeError) as exc:
+                    st.error(f"Could not load snapshot: {exc}")
 
 
 if __name__ == "__main__":
