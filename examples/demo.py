@@ -6,11 +6,16 @@ Run with::
 
 It runs three scenarios — unmitigated, with an intervention, and with
 vaccination — and prints headline statistics for each, illustrating the API.
+Finally it runs the same scenario through both engines (compartmental and
+agent-based) to show they agree.
 """
 
-from outbreak import Simulation, preset_scenario
-from outbreak.config import InterventionConfig, VaccinationConfig
+import numpy as np
+
+from outbreak import Simulation, preset_scenario, run_ensemble
+from outbreak.config import InterventionConfig, SimulationConfig, VaccinationConfig
 from outbreak.interventions import lockdown
+from outbreak.metrics import summarize
 
 
 def show(title, summary):
@@ -51,6 +56,23 @@ def main():
     sim = Simulation(vaccinated.validate())
     sim.run_to_end()
     show("With vaccination (1%/day from day 20)", sim.summary())
+
+    # 4. The same disease through both engines: the agent-based model is a
+    #    stochastic realisation of the compartmental one, so their average
+    #    final sizes agree.
+    print("\n=== Compartmental vs agent-based engine (12-run mean) ===")
+    for engine in ("compartmental", "agent"):
+        scenario = preset_scenario("influenza_like", total_population=population)
+        scenario.population.initial_infected = 500
+        scenario.disease.waning_immunity_days = None  # lifelong => true final size
+        scenario.simulation = SimulationConfig(
+            duration_days=300, engine=engine, n_agents=100_000, overdispersion=None,
+        )
+        histories = run_ensemble(scenario.validate(), n_runs=12, base_seed=0)
+        attack = np.mean([summarize(h, scenario.disease.r0).attack_rate for h in histories])
+        peak = np.mean([summarize(h, scenario.disease.r0).peak_infectious for h in histories])
+        print(f"  {engine:<14}: attack rate {100 * attack:5.1f}%   "
+              f"mean peak infectious {peak:,.0f}")
 
 
 if __name__ == "__main__":

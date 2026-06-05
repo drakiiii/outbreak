@@ -333,10 +333,23 @@ class SimulationConfig:
     dt: float = 1.0                # time step in days
     stochastic: bool = True        # binomial transitions vs deterministic expectations
     # Overdispersion of transmission (superspreading). ``None`` disables it;
-    # smaller values => more overdispersion. Interpreted as the shape of a
-    # mean-one Gamma multiplier applied to the daily force of infection.
+    # smaller values => more overdispersion. In the compartmental engine this is
+    # the shape of a mean-one Gamma multiplier on the daily force of infection;
+    # in the agent engine it is the shape of a per-agent mean-one infectiousness
+    # multiplier (so a few individuals drive most transmission).
     overdispersion: Optional[float] = 0.5
     seed: Optional[int] = None
+
+    # Which engine advances the epidemic:
+    #   "compartmental" - fast age-structured stochastic SEIR (default)
+    #   "agent"         - individual-based model (see outbreak.agents)
+    engine: str = "compartmental"
+    # Agent engine only: number of simulated individuals. When smaller than the
+    # total population the model simulates a representative sample and scales its
+    # reported counts up to population scale (keeps large populations tractable).
+    n_agents: int = 100_000
+
+    ENGINES = ("compartmental", "agent")
 
     def validate(self) -> "SimulationConfig":
         if self.duration_days <= 0:
@@ -344,6 +357,12 @@ class SimulationConfig:
         _check_positive(self.dt, "dt")
         if self.overdispersion is not None and self.overdispersion <= 0:
             raise ValueError("overdispersion must be > 0 or None")
+        if self.engine not in self.ENGINES:
+            raise ValueError(
+                f"engine must be one of {self.ENGINES}, got {self.engine!r}"
+            )
+        if self.n_agents <= 0:
+            raise ValueError("n_agents must be > 0")
         return self
 
     @property

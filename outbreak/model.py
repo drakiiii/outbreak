@@ -36,6 +36,14 @@ import numpy as np
 
 from .config import ScenarioConfig
 from .contacts import default_contact_matrix, symmetrize
+from .epidemiology import (
+    calibrate_beta,
+    icu_death_probability,
+    ngm_unit,
+    resolve_parameters,
+    spectral_radius,
+    transition_probability,
+)
 
 
 @dataclass
@@ -110,65 +118,34 @@ class EpidemicModel:
 
     # ------------------------------------------------------------------ setup
     def _resolve_disease_parameters(self) -> None:
-        d = self.config.disease
-        n = self.n_age
-
-        # Transition rates (per day) -> per-step probabilities below.
-        self.sigma = 1.0 / d.latent_period                      # E -> infectious
-        self.gamma_p = 1.0 / d.presymptomatic_period            # Ip -> Is
-        self.gamma_a = 1.0 / d.asymptomatic_infectious_period   # Ia -> R
-        self.gamma_s = 1.0 / d.symptomatic_period               # Is -> H/R
-        self.gamma_h = 1.0 / d.hospital_stay                    # H -> C/R
-        self.gamma_c = 1.0 / d.icu_stay                         # C -> D/R
-        self.omega = (
-            1.0 / d.waning_immunity_days if d.waning_immunity_days else 0.0
-        )
-
-        # Branching probabilities (per age).
-        self.p_asymp = d.asymptomatic_fraction_arr(n)
-        hosp = d.hospitalization_rate_arr(n)
-        icu = d.icu_rate_arr(n)
-        death = d.death_rate_arr(n)
-
-        ve_sev = self.config.vaccination.ve_severity
-        # Severity by stratum: vaccinated have a single reduction applied to the
-        # probability of progressing to hospitalisation (avoids triple-counting
-        # the efficacy across the cascade).
-        self.hosp_rate = np.stack([hosp, hosp * (1.0 - ve_sev)])   # (2, n_age)
-        self.icu_rate = icu                                        # (n_age,)
-        self.death_rate = death                                    # (n_age,)
-
-        # Relative infectiousness weights.
-        self.rel_p = d.rel_infectiousness_presymptomatic
-        self.rel_a = d.rel_infectiousness_asymptomatic
-        self.f_transmission = np.array(
-            [1.0, 1.0 - self.config.vaccination.ve_transmission]
-        )  # per stratum infectiousness multiplier
-
-        # Expected infectiousness-weighted duration of an infection started in
-        # each age group (used by the next-generation matrix).
-        self.infectious_duration = (
-            self.p_asymp * self.rel_a * d.asymptomatic_infectious_period
-            + (1.0 - self.p_asymp)
-            * (self.rel_p * d.presymptomatic_period + d.symptomatic_period)
-        )
+        # Resolved once via the shared epidemiology layer so the compartmental
+        # and agent-based engines describe an identical disease.
+        p = resolve_parameters(self.config)
+        self.sigma = p.sigma
+        self.gamma_p = p.gamma_p
+        self.gamma_a = p.gamma_a
+        self.gamma_s = p.gamma_s
+        self.gamma_h = p.gamma_h
+        self.gamma_c = p.gamma_c
+        self.omega = p.omega
+        self.p_asymp = p.p_asymp
+        self.hosp_rate = p.hosp_rate          # (2, n_age)
+        self.icu_rate = p.icu_rate            # (n_age,)
+        self.death_rate = p.death_rate        # (n_age,)
+        self.rel_p = p.rel_p
+        self.rel_a = p.rel_a
+        self.f_transmission = p.f_transmission
+        self.infectious_duration = p.infectious_duration
 
     def _ngm_unit(self) -> np.ndarray:
-        """Next-generation matrix with beta=1 and full susceptibility.
-
-        ``K0[i, j]`` = secondary infections in group i produced by one infected
-        in group j. Using ``C[j, i]`` (contacts a j-individual has with i) and
-        the expected infectious duration ``T_j``.
-        """
-        return self.contact.T * self.infectious_duration[None, :]
+        """Next-generation matrix with beta=1 and full susceptibility."""
+        return ngm_unit(self.contact, self.infectious_duration)
 
     def _calibrate_beta(self) -> None:
-        k0 = self._ngm_unit()
-        rho = _spectral_radius(k0)
-        if rho <= 0:
-            raise ValueError("degenerate contact structure: cannot calibrate beta")
-        self.beta = self.config.disease.r0 / rho
-        self.r0_realized = self.beta * rho  # == r0 by construction; kept for clarity
+        self.beta = calibrate_beta(
+            self.contact, self.infectious_duration, self.config.disease.r0
+        )
+        self.r0_realized = self.config.disease.r0  # by construction
 
     def _init_state(self) -> None:
         n = self.n_age
@@ -210,7 +187,7 @@ class EpidemicModel:
     @staticmethod
     def _prob(rate: float, dt: float) -> float:
         """Convert a continuous rate to a per-step transition probability."""
-        return 1.0 - np.exp(-rate * dt)
+        return transition_probability(rate, dt)
 
     def _maybe_round(self, x: np.ndarray) -> np.ndarray:
         if self.stochastic:
@@ -253,7 +230,7 @@ class EpidemicModel:
         """Model-implied effective reproduction number at ``day``."""
         sus = self.susceptibility_by_age()
         k = (sus[:, None]) * self._ngm_unit()      # diag(sus) @ K0
-        return self.beta_effective(day) * _spectral_radius(k)
+        return self.beta_effective(day) * spectral_radius(k)
 
     def _vaccinate(self, day: float) -> None:
         vac = self.config.vaccination
@@ -382,19 +359,9 @@ class EpidemicModel:
 
     def _icu_death_probability(self):
         """Death probability for ICU leavers, raised when ICU is over capacity."""
-        cap = self.config.healthcare.icu_capacity
-        death_prob = self.death_rate.copy()
-        overflow = 0.0
-        if cap is not None:
-            occupancy = float(self.C.sum())
-            if occupancy > cap:
-                overflow = occupancy - cap
-                share_over = overflow / occupancy
-                mult = 1.0 + share_over * (
-                    self.config.healthcare.overflow_mortality_multiplier - 1.0
-                )
-                death_prob = np.minimum(1.0, death_prob * mult)
-        return death_prob, overflow
+        return icu_death_probability(
+            float(self.C.sum()), self.death_rate, self.config.healthcare
+        )
 
     def _clip_negatives(self) -> None:
         for name in ("S", "V", "R", "D"):
@@ -458,11 +425,3 @@ class EpidemicModel:
             setattr(self, name, np.asarray(state[name], dtype=float))
         if state.get("rng") is not None:
             self.rng.bit_generator.state = state["rng"]
-
-
-def _spectral_radius(matrix: np.ndarray) -> float:
-    """Largest absolute eigenvalue of a (small) square matrix."""
-    if matrix.shape == (1, 1):
-        return float(abs(matrix[0, 0]))
-    eigenvalues = np.linalg.eigvals(matrix)
-    return float(np.max(np.abs(eigenvalues)))

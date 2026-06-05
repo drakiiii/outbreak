@@ -23,9 +23,10 @@ from .config import (
     DISEASE_PRESETS,
     preset_scenario,
 )
+from .agents import AgentModel
 from .metrics import EpidemicSummary, aggregate_ensemble, history_to_columns, summarize
 from .model import EpidemicModel, StepRecord
-from .simulation import RunState, Simulation, run_ensemble
+from .simulation import RunState, Simulation, build_engine, run_ensemble
 
 __version__ = "0.1.0"
 
@@ -41,9 +42,11 @@ __all__ = [
     "DISEASE_PRESETS",
     "preset_scenario",
     "EpidemicModel",
+    "AgentModel",
     "StepRecord",
     "Simulation",
     "RunState",
+    "build_engine",
     "run_ensemble",
     "EpidemicSummary",
     "summarize",

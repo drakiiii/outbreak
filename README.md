@@ -1,11 +1,12 @@
 # 🦠 Outbreak — a realistic epidemic simulator
 
-Outbreak is an **age-structured, stochastic SEIR-type epidemic simulator** with an
-interactive UI. It is built to reflect modern epidemiological understanding of
-how respiratory viruses spread — pre-symptomatic and asymptomatic transmission,
-superspreading, age-dependent severity, waning immunity, vaccination and
-non-pharmaceutical interventions — while staying fast enough to explore
-interactively.
+Outbreak is an **age-structured, stochastic epidemic simulator** with an
+interactive UI and a choice of two interchangeable engines — a fast
+**compartmental SEIR** model and an **agent-based** (individual-level) model. It
+is built to reflect modern epidemiological understanding of how respiratory
+viruses spread — pre-symptomatic and asymptomatic transmission, superspreading,
+age-dependent severity, waning immunity, vaccination and non-pharmaceutical
+interventions — while staying fast enough to explore interactively.
 
 > The default parameters are **illustrative** (qualitatively realistic, not
 > calibrated to a specific pathogen or country). They are a sound starting point
@@ -16,6 +17,11 @@ interactively.
 
 ## Highlights
 
+- **Two interchangeable engines.** A fast **compartmental** SEIR model (tracks
+  counts per age group) and an **agent-based** model (simulates individuals with
+  per-person superspreading and demographic stochasticity). Both describe the
+  same disease, share the same R₀ calibration, and run behind the identical
+  `Simulation` interface — so the UI, save/load and ensembles work with either.
 - **Realistic natural history.** Susceptible → Vaccinated → Exposed (latent) →
   pre-symptomatic / asymptomatic / symptomatic infectious → hospitalised → ICU →
   recovered / dead. People are infectious *before* symptoms, and a fraction never
@@ -101,7 +107,31 @@ band = aggregate_ensemble(histories, "Is", quantiles=(0.05, 0.5, 0.95))
 ```
 
 See [`examples/demo.py`](examples/demo.py) for unmitigated vs. lockdown vs.
-vaccination comparisons.
+vaccination comparisons, plus a head-to-head of the two engines.
+
+### Choosing an engine
+
+The engine is selected per scenario; everything else is identical.
+
+```python
+from outbreak import Simulation, preset_scenario
+from outbreak.config import SimulationConfig
+
+scenario = preset_scenario("covid_like", total_population=1_000_000)
+
+# Agent-based: simulate individuals. Below the population size the model
+# simulates a representative sample and scales results up to population scale.
+scenario.simulation = SimulationConfig(engine="agent", n_agents=100_000)
+sim = Simulation(scenario.validate())
+sim.run_to_end()
+```
+
+- **`compartmental`** (default) — fastest; ideal for large populations,
+  parameter sweeps and big ensembles.
+- **`agent`** — individual-level. Adds genuine per-person superspreading (a few
+  agents drive most transmission) and demographic stochasticity (small outbreaks
+  can fade out by chance). Use `n_agents` to trade fidelity for speed; very small
+  seeds may stochastically go extinct — that is the model being honest, not a bug.
 
 ---
 
@@ -112,10 +142,12 @@ outbreak/
 ├── outbreak/                 # the engine (no UI dependency)
 │   ├── config.py             # validated parameter schema + disease presets
 │   ├── contacts.py           # age structure + contact matrices
-│   ├── model.py              # stochastic SEIR engine + NGM β-calibration + Rt
+│   ├── epidemiology.py       # shared math: NGM β-calibration, rates, ICU overflow
+│   ├── model.py              # compartmental stochastic SEIR engine + Rt
+│   ├── agents.py             # agent-based (individual-level) engine
 │   ├── interventions.py      # named NPI builders
 │   ├── metrics.py            # Rt, attack rate, peaks, ensemble aggregation
-│   └── simulation.py         # run/pause/step/reset state machine + (de)serialisation
+│   └── simulation.py         # run/pause/step/reset state machine + engine dispatch
 ├── app/streamlit_app.py      # interactive UI
 ├── examples/demo.py          # headless demonstration
 └── tests/                    # validation + behaviour suite
@@ -132,7 +164,7 @@ outbreak/
 | **Vaccination** | start day, daily rate, coverage cap, age prioritisation, efficacy vs. infection / severity / transmission |
 | **Interventions** | per-window start/end and transmission reduction |
 | **Healthcare** | hospital & ICU capacity, overflow mortality multiplier |
-| **Simulation** | duration, time step `dt`, deterministic/stochastic, over-dispersion, seed |
+| **Simulation** | duration, time step `dt`, deterministic/stochastic, over-dispersion, seed, **engine** (`compartmental`/`agent`), **n_agents** |
 
 Built-in disease presets: `covid_like`, `influenza_like`, `measles_like`.
 
@@ -149,7 +181,10 @@ The test suite (`pytest`) checks, among other things, that:
   a sub-critical R₀ < 1 fails to take off;
 - interventions reduce Rₜ; vaccination reduces the attack rate; ICU overflow
   increases deaths;
-- runs are reproducible from a seed and survive a save/load round-trip.
+- runs are reproducible from a seed and survive a save/load round-trip;
+- **both engines agree**: in the mean-field limit the agent-based model
+  reproduces the compartmental attack rate and peak to within a few percent,
+  confirming it is a stochastic realisation of the same disease.
 
 The deterministic mode converges to the **analytic SIR final-size relation**
 (`z = 1 − e^{−R₀ z}`) as the time step `dt` shrinks — e.g. for R₀ = 2.5 the
@@ -165,13 +200,20 @@ pytest                # run the full suite
 
 ## Modelling notes & limitations
 
-- This is a **compartmental** model with age strata. It captures population-level
-  dynamics well but does not model explicit individual contact networks,
-  households or geography. A natural next step is an **agent-based** engine behind
-  the same `Simulation` interface (the engine and UI are deliberately decoupled).
-- Over-dispersion is modelled phenomenologically as a daily Gamma multiplier on
-  the force of infection; it reproduces aggregate variability but not
-  individual-level superspreading events.
+- **Mixing.** Both engines currently use age-structured **mean-field** mixing
+  (an age contact matrix), not explicit individual contact networks, households
+  or geography. The agent-based engine adds individual heterogeneity and
+  demographic stochasticity on top of that mixing; an explicit contact
+  **network** (households, schools, workplaces) is the natural next iteration and
+  the agent representation is built to accommodate it.
+- **Superspreading.** The compartmental engine models over-dispersion
+  phenomenologically as a daily Gamma multiplier on the force of infection; the
+  agent engine instead assigns each infected individual its own mean-one
+  infectiousness, so superspreading is realised at the individual level.
+- **Agent scaling.** When `n_agents` is below the population size the agent
+  engine simulates a representative sample and scales reported counts up. This
+  keeps large populations tractable but coarsens small-number effects; increase
+  `n_agents` for fine-grained tail behaviour.
 - Default contact matrices and severity parameters are illustrative. Calibrate to
   empirical data for any quantitative use.
 

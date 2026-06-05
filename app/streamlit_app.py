@@ -130,7 +130,29 @@ def build_scenario() -> ScenarioConfig:
 
     with st.sidebar.expander("Simulation controls", expanded=True):
         duration = st.number_input("Duration (days)", 30, 2000, 365, 5)
-        stochastic = st.checkbox("Stochastic (random) dynamics", value=True)
+        engine_label = st.radio(
+            "Engine",
+            ["Compartmental (fast)", "Agent-based (individuals)"],
+            help=(
+                "Compartmental tracks counts per age group (fast). Agent-based "
+                "simulates individuals with per-person superspreading and "
+                "demographic stochasticity (slower, richer)."
+            ),
+        )
+        engine = "agent" if engine_label.startswith("Agent") else "compartmental"
+        n_agents = 100_000
+        if engine == "agent":
+            n_agents = st.number_input(
+                "Number of agents", 5_000, 1_000_000, 100_000, 5_000,
+                help=("Individuals simulated. Below the population size the model "
+                      "simulates a representative sample and scales results up. "
+                      "Very small seeds may stochastically fade out."),
+            )
+        stochastic = st.checkbox("Stochastic (random) dynamics", value=True,
+                                 disabled=(engine == "agent"),
+                                 help="The agent engine is always stochastic.")
+        if engine == "agent":
+            stochastic = True
         overdispersion = st.slider("Superspreading (lower = burstier)", 0.05, 5.0, 0.5, 0.05,
                                    disabled=not stochastic)
         seed = st.number_input("Random seed", 0, 1_000_000, 42, 1, disabled=not stochastic)
@@ -167,6 +189,7 @@ def build_scenario() -> ScenarioConfig:
             duration_days=int(duration), stochastic=stochastic,
             overdispersion=(overdispersion if stochastic else None),
             seed=int(seed) if stochastic else None,
+            engine=engine, n_agents=int(n_agents),
         ),
     ).validate()
 
@@ -287,8 +310,13 @@ def main():
             sim.run_to_end()
         speed = c6.selectbox("Speed", ["Fast", "Medium", "Slow"], index=0)
 
+        if sim.config.simulation.engine == "agent":
+            engine_tag = f"agent-based · {sim.model.n_agents:,} agents (×{sim.model.scale:.0f})"
+        else:
+            engine_tag = "compartmental"
         st.progress(sim.progress, text=f"Day {sim.current_day:.0f} / "
-                                       f"{sim.config.simulation.duration_days}  •  {sim.state.value}")
+                                       f"{sim.config.simulation.duration_days}  •  "
+                                       f"{engine_tag}  •  {sim.state.value}")
 
         if sim.history:
             df = pd.DataFrame(sim.to_columns())

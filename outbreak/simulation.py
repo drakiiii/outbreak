@@ -19,6 +19,7 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
+from .agents import AgentModel
 from .config import ScenarioConfig
 from .metrics import EpidemicSummary, history_to_columns, summarize
 from .model import EpidemicModel, StepRecord
@@ -31,12 +32,23 @@ class RunState(str, Enum):
     FINISHED = "finished"
 
 
+def build_engine(config: ScenarioConfig, rng: Optional[np.random.Generator] = None):
+    """Construct the engine selected by ``config.simulation.engine``.
+
+    Both engines satisfy the same interface the controller relies on, so the
+    rest of the package is agnostic to which one is running.
+    """
+    if config.simulation.engine == "agent":
+        return AgentModel(config, rng=rng)
+    return EpidemicModel(config, rng=rng)
+
+
 class Simulation:
     """Drive and observe a single epidemic realisation."""
 
     def __init__(self, config: ScenarioConfig, rng: Optional[np.random.Generator] = None):
         self.config = config.validate()
-        self.model = EpidemicModel(self.config, rng=rng)
+        self.model = build_engine(self.config, rng=rng)
         self.history: List[StepRecord] = []
         self.state: RunState = RunState.IDLE
         self._n_steps = self.config.simulation.n_steps
@@ -112,7 +124,7 @@ class Simulation:
 
     def reset(self, rng: Optional[np.random.Generator] = None) -> None:
         """Restart from t=0 with the same configuration."""
-        self.model = EpidemicModel(self.config, rng=rng)
+        self.model = build_engine(self.config, rng=rng)
         self.history = []
         self.state = RunState.IDLE
 
