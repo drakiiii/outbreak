@@ -56,12 +56,16 @@ def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
     d = config.disease
     n = config.population.n_age
 
+    # A mean duration of D days corresponds to a constant transition rate of 1/D
+    # per day (exponential dwell-time assumption).
     sigma = 1.0 / d.latent_period
     gamma_p = 1.0 / d.presymptomatic_period
     gamma_a = 1.0 / d.asymptomatic_infectious_period
     gamma_s = 1.0 / d.symptomatic_period
     gamma_h = 1.0 / d.hospital_stay
     gamma_c = 1.0 / d.icu_stay
+    # `if d.waning_immunity_days` is falsy for both None and 0.0, so either
+    # disables waning by setting the rate to 0.
     omega = 1.0 / d.waning_immunity_days if d.waning_immunity_days else 0.0
 
     p_asymp = d.asymptomatic_fraction_arr(n)
@@ -73,10 +77,14 @@ def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
     # Severity by stratum: a single reduction applied to the probability of
     # progressing to hospitalisation (avoids triple-counting efficacy along the
     # cascade).
+    # Stack two rows -> shape (2, n_age): row 0 = unvaccinated, row 1 = vaccinated
+    # (severity scaled down by the vaccine efficacy).
     hosp_rate = np.stack([hosp, hosp * (1.0 - ve_sev)])
 
     rel_p = d.rel_infectiousness_presymptomatic
     rel_a = d.rel_infectiousness_asymptomatic
+    # Length-2 [unvaccinated, vaccinated] onward-transmission factors. Same
+    # two-row stratum convention as hosp_rate above (index 0/1 = un/vaccinated).
     f_transmission = np.array([1.0, 1.0 - config.vaccination.ve_transmission])
 
     # Expected infectiousness-weighted duration of an infection started in each
@@ -107,6 +115,9 @@ def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
 
 def transition_probability(rate, dt: float):
     """Convert a continuous per-day rate to a per-step transition probability."""
+    # Probability that an exponential(rate) event fires within a window of dt
+    # days: P = 1 - exp(-rate*dt). np.asarray means rate may be a scalar or an
+    # array (the operation broadcasts either way).
     return 1.0 - np.exp(-np.asarray(rate, dtype=float) * dt)
 
 
@@ -117,13 +128,18 @@ def ngm_unit(contact: np.ndarray, infectious_duration: np.ndarray) -> np.ndarray
     one infected individual in group ``j``: contacts a ``j``-individual has with
     ``i`` (``C[j, i]``) times ``j``'s expected infectious duration.
     """
+    # contact.T puts C[j, i] at position [i, j]. infectious_duration[None, :] is
+    # a (1, n_age) row vector that broadcasts across rows, scaling each *column* j
+    # by group j's infectious duration -> K0[i, j] = C[j, i] * duration[j].
     return contact.T * infectious_duration[None, :]
 
 
 def spectral_radius(matrix: np.ndarray) -> float:
     """Largest absolute eigenvalue of a (small) square matrix."""
     if matrix.shape == (1, 1):
-        return float(abs(matrix[0, 0]))
+        return float(abs(matrix[0, 0]))  # 1x1 case: the single entry is the eigenvalue
+    # eigvals returns all (possibly complex) eigenvalues; the spectral radius is
+    # the largest magnitude among them.
     eigenvalues = np.linalg.eigvals(matrix)
     return float(np.max(np.abs(eigenvalues)))
 
@@ -148,13 +164,15 @@ def icu_death_probability(icu_occupancy: float, death_rate: np.ndarray, healthca
     above capacity (0 when within capacity).
     """
     cap = healthcare.icu_capacity
-    death_prob = np.asarray(death_rate, dtype=float).copy()
+    death_prob = np.asarray(death_rate, dtype=float).copy()  # copy so we never mutate the caller's array
     overflow = 0.0
     if cap is not None and icu_occupancy > cap:
         overflow = icu_occupancy - cap
-        share_over = overflow / icu_occupancy
+        share_over = overflow / icu_occupancy  # fraction of current ICU patients that are over capacity
+        # Blend baseline and elevated mortality by the over-capacity share: at
+        # share_over=0 mult=1 (no change), at share_over=1 mult=the full multiplier.
         mult = 1.0 + share_over * (healthcare.overflow_mortality_multiplier - 1.0)
-        death_prob = np.minimum(1.0, death_prob * mult)
+        death_prob = np.minimum(1.0, death_prob * mult)  # clamp so probabilities never exceed 1
     return death_prob, overflow
 
 
@@ -169,12 +187,14 @@ def restore_array(state: dict, name: str, expected_shape, dtype=float) -> np.nda
     """
     if name not in state:
         raise ValueError(f"snapshot is missing required field {name!r}")
+    # Normalise the expected shape to a tuple of plain ints so the == comparison
+    # below is reliable (accepts e.g. a list or numpy shape).
     expected_shape = tuple(int(d) for d in expected_shape)
     try:
         arr = np.asarray(state[name], dtype=dtype)
-    except (ValueError, TypeError) as exc:  # ragged / non-numeric input
+    except (ValueError, TypeError) as exc:  # ragged / non-numeric input can't be coerced
         raise ValueError(f"snapshot field {name!r} is not a valid array") from exc
-    if arr.shape != expected_shape:
+    if arr.shape != expected_shape:  # reject wrong-sized data before it reaches the engine
         raise ValueError(
             f"snapshot field {name!r} has shape {arr.shape}, expected {expected_shape}"
         )

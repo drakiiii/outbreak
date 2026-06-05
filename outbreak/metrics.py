@@ -55,14 +55,17 @@ class EpidemicSummary:
 
 
 def _series(history: Sequence[StepRecord], attr: str) -> np.ndarray:
+    # Pull one attribute off every record into a 1-D float array (a column /
+    # time series). getattr lets us select the field by name at runtime.
     return np.array([getattr(r, attr) for r in history], dtype=float)
 
 
 def summarize(history: Sequence[StepRecord], r0: float) -> Optional[EpidemicSummary]:
     """Compute an :class:`EpidemicSummary` from a list of step records."""
     if not history:
-        return None
+        return None  # nothing to summarise for an empty run
 
+    # Extract each tracked quantity as its own aligned time-series array.
     days = _series(history, "day")
     new_inf = _series(history, "new_infections")
     new_sym = _series(history, "new_symptomatic")
@@ -71,25 +74,29 @@ def summarize(history: Sequence[StepRecord], r0: float) -> Optional[EpidemicSumm
     new_deaths = _series(history, "new_deaths")
     rt = _series(history, "rt")
 
+    # Arrays add element-wise, so these are per-step sums across compartments.
     infectious = _series(history, "Ip") + _series(history, "Ia") + _series(history, "Is")
     active = infectious + _series(history, "E") + _series(history, "H") + _series(history, "C")
     hosp_occ = _series(history, "H")
     icu_occ = _series(history, "C")
 
+    # Total population is conserved, so summing the last record's compartments
+    # recovers it (no need to read the original config).
     last = history[-1]
     total_pop = (
         last.S + last.V + last.E + last.Ip + last.Ia + last.Is
         + last.H + last.C + last.R + last.D
     )
 
-    total_infections = float(new_inf.sum())
+    total_infections = float(new_inf.sum())  # sum of per-step new infections
     total_deaths = float(_series(history, "D")[-1])  # cumulative deaths = current D
 
     def _peak(values: np.ndarray):
+        # Return (peak value, day of peak); (0.0, None) for an all-zero/empty series.
         if values.size == 0 or np.all(values == 0):
             return 0.0, None
-        idx = int(np.argmax(values))
-        return float(values[idx]), float(days[idx])
+        idx = int(np.argmax(values))  # argmax = index of the first maximum
+        return float(values[idx]), float(days[idx])  # map that index back to a day
 
     peak_infectious, peak_infectious_day = _peak(infectious)
     peak_hosp, peak_hosp_day = _peak(hosp_occ)
@@ -98,9 +105,10 @@ def summarize(history: Sequence[StepRecord], r0: float) -> Optional[EpidemicSumm
 
     # First day Rt falls below 1 after the epidemic has started growing.
     rt_cross = None
+    # np.where(...) returns a tuple of index arrays; [0] takes the first axis.
     started = np.where(new_inf > 0)[0]
-    if started.size:
-        for k in range(started[0], len(rt)):
+    if started.size:  # there was at least one day with new infections
+        for k in range(started[0], len(rt)):  # scan forward from the first such day
             if rt[k] < 1.0:
                 rt_cross = float(days[k])
                 break
@@ -151,6 +159,7 @@ def history_to_columns(history: Sequence[StepRecord]) -> dict:
         "new_infections", "new_symptomatic", "new_hospitalizations",
         "new_icu", "new_deaths", "rt", "beta_effective", "icu_overflow",
     ]
+    # Dict comprehension: one named column (plain list) per field.
     cols = {f: _series(history, f).tolist() for f in fields}
     # Convenience aggregates.
     cols["infectious"] = (
@@ -160,6 +169,7 @@ def history_to_columns(history: Sequence[StepRecord]) -> dict:
         np.array(cols["infectious"])
         + _series(history, "E") + _series(history, "H") + _series(history, "C")
     ).tolist()
+    # cumsum gives the running total of new infections (cumulative incidence).
     cols["cumulative_infections"] = np.cumsum(_series(history, "new_infections")).tolist()
     return cols
 
@@ -177,11 +187,17 @@ def aggregate_ensemble(
     """
     if not histories:
         return {"day": []}
+    # Runs may differ in length; truncate every run to the shortest so columns
+    # line up step-for-step.
     min_len = min(len(h) for h in histories)
     days = _series(histories[0][:min_len], "day")
+    # Stack the per-run series into a 2-D array, shape (n_runs, min_len): rows
+    # are runs, columns are time steps.
     stacked = np.vstack([_series(h[:min_len], attr) for h in histories])
     out = {"day": days.tolist()}
     for q in quantiles:
+        # axis=0 reduces across runs, giving one quantile value per time step
+        # (i.e. a pointwise uncertainty band over time).
         out[f"q{q}"] = np.quantile(stacked, q, axis=0).tolist()
-    out["mean"] = stacked.mean(axis=0).tolist()
+    out["mean"] = stacked.mean(axis=0).tolist()  # pointwise mean across runs
     return out

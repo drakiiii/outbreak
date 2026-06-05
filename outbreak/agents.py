@@ -60,6 +60,7 @@ from .model import StepRecord
 
 # Agent states (compact integer codes). Susceptibility and vaccination are
 # separate axes: SUS + vaccinated flag == the compartmental "V" pool.
+# Tuple unpacking of range(9) assigns SUS=0, E=1, ... D=8.
 SUS, E, IP, IA, IS, H, C, R, D = range(9)
 STATE_NAMES = ("SUS", "E", "Ip", "Ia", "Is", "H", "C", "R", "D")
 
@@ -90,7 +91,8 @@ class AgentModel:
         self.n_agents = max(self.n_agents, 1)
         self.scale = total_pop / self.n_agents
 
-        # Agents per age group follow the population age distribution.
+        # Agents per age group follow the population age distribution. Result is
+        # an integer (n_age,) array that sums to exactly n_agents.
         self.agents_by_age = _largest_remainder(self.n_agents, pop_by_age / total_pop)
         self.N = self.agents_by_age.astype(float)          # agent-scale denominators
         self.N_safe = np.where(self.N > 0, self.N, 1.0)
@@ -117,7 +119,10 @@ class AgentModel:
         n = self.n_agents
         # Per-agent age group, laid out contiguously by age for fast prioritised
         # vaccination (oldest groups occupy the highest indices).
+        # np.repeat expands [0,1,2,...] by per-age counts, e.g. counts [2,3] ->
+        # [0,0,1,1,1], so self.age is a length-n array of age-group codes.
         self.age = np.repeat(np.arange(self.n_age), self.agents_by_age).astype(np.int16)
+        # Parallel per-agent arrays, all indexed by the same agent id (row).
         self.state = np.full(n, SUS, dtype=np.int8)
         self.vacc = np.zeros(n, dtype=bool)
         # Per-agent infectiousness multiplier (set when infected). Mean one.
@@ -126,9 +131,11 @@ class AgentModel:
         # Pre-existing immunity.
         imm = self.config.population.initial_immune_fraction
         if imm > 0:
+            # np.where(mask)[0] yields the integer row indices where mask is True.
             sus_idx = np.where(self.state == SUS)[0]
             k = int(round(imm * sus_idx.size))
             if k > 0:
+                # Sample k distinct agents (replace=False) and mark them recovered.
                 chosen = self.rng.choice(sus_idx, size=k, replace=False)
                 self.state[chosen] = R
 
@@ -141,8 +148,11 @@ class AgentModel:
             if seed_agents > 0:
                 chosen = self.rng.choice(sus_idx, size=seed_agents, replace=False)
                 # Split seeds into symptomatic / asymptomatic by age-specific rate.
+                # u is one uniform(0,1) draw per chosen agent; comparing to the
+                # per-agent asymptomatic probability gives a boolean mask.
                 u = self.rng.random(chosen.size)
                 asymp = u < self.p.p_asymp[self.age[chosen]]
+                # chosen[asymp] / chosen[~asymp] select the two disjoint subsets.
                 self.state[chosen[asymp]] = IA
                 self.state[chosen[~asymp]] = IS
                 self._assign_infectivity(chosen)
@@ -165,6 +175,8 @@ class AgentModel:
 
     def _counts_by_age(self, mask: np.ndarray) -> np.ndarray:
         """Number of agents in each age group among those selected by ``mask``."""
+        # bincount tallies the age codes of the masked agents; minlength pads the
+        # result to a full (n_age,) vector even if some ages have zero counts.
         return np.bincount(self.age[mask], minlength=self.n_age).astype(float)
 
     def susceptibility_by_age(self) -> np.ndarray:
@@ -188,15 +200,17 @@ class AgentModel:
         Deterministic mode is undefined for individuals, so the agent engine is
         always stochastic; the per-agent draw is the model.
         """
-        idx = np.where(mask)[0]
+        idx = np.where(mask)[0]              # agent ids where mask is True
         if idx.size == 0:
             return idx
         p = np.asarray(prob, dtype=float)
         if p.ndim == 0:
+            # Scalar probability: one uniform draw per candidate vs that constant.
             hit = self.rng.random(idx.size) < float(p)
         else:
+            # Per-agent probability array: index it down to just the candidates.
             hit = self.rng.random(idx.size) < p[idx]
-        return idx[hit]
+        return idx[hit]                      # keep only the ids whose draw fired
 
     def _vaccinate(self, day: float) -> None:
         vac = self.config.vaccination
@@ -219,9 +233,12 @@ class AgentModel:
         elig_idx = np.where(eligible)[0]
         if vac.prioritize_elderly:
             # Agents are laid out by age; highest indices are the oldest groups.
+            # Sort eligible ids by descending age (stable keeps relative order),
+            # then take the first n_doses (the oldest available).
             order = elig_idx[np.argsort(-self.age[elig_idx], kind="stable")]
             chosen = order[:n_doses]
         else:
+            # No prioritisation: pick n_doses distinct eligible agents at random.
             chosen = self.rng.choice(elig_idx, size=n_doses, replace=False)
         self.vacc[chosen] = True
         self.cumulative_vaccinated += chosen.size * self.scale
@@ -235,24 +252,31 @@ class AgentModel:
 
         # 2. Force of infection by age from the current infectious agents.
         beta_eff = self.beta_effective(day)
+        # Per-agent infectious-phase weight (0 for non-infectious agents).
         weight = np.zeros(self.n_agents)
         is_ip, is_ia, is_is = self.state == IP, self.state == IA, self.state == IS
         weight[is_ip] = self.p.rel_p
         weight[is_ia] = self.p.rel_a
         weight[is_is] = 1.0
-        infectious = is_ip | is_ia | is_is
+        infectious = is_ip | is_ia | is_is        # boolean OR of the three masks
         # Per-agent contribution = stratum factor * phase weight * individual load.
+        # np.where picks the vaccinated vs unvaccinated f_transmission per agent.
         f_strat = np.where(self.vacc, self.p.f_transmission[1], self.p.f_transmission[0])
         contrib = (weight * f_strat * self.infectivity)[infectious]
+        # Weighted bincount sums each infectious agent's contribution into its age
+        # bin -> total infectious pressure per age group, shape (n_age,).
         pressure = np.bincount(
             self.age[infectious], weights=contrib, minlength=self.n_age
         )
         prevalence = pressure / self.N_safe
+        # Matrix-vector product mixes ages via the contact matrix -> per-age FOI.
         foi = beta_eff * (self.contact @ prevalence)          # (n_age,)
 
         ve_sus = self.config.vaccination.ve_susceptibility
         sus = self.state == SUS
+        # Fancy-index the per-age FOI back onto every agent by its age code.
         foi_age = foi[self.age]
+        # Vaccinated agents experience a reduced FOI.
         foi_age = np.where(self.vacc, foi_age * (1.0 - ve_sus), foi_age)
         p_inf = transition_probability(foi_age, self.dt)
         newly = self._bernoulli(sus, p_inf)
@@ -265,10 +289,14 @@ class AgentModel:
         leave_H = self._bernoulli(self.state == H, transition_probability(self.p.gamma_h, self.dt))
         leave_C = self._bernoulli(self.state == C, transition_probability(self.p.gamma_c, self.dt))
 
-        # Branch the leavers via complementary boolean masks.
+        # Branch the leavers via complementary boolean masks: each `leave_*` is an
+        # array of agent ids, and masking it splits those ids into two subsets.
         asymp = self.rng.random(leave_E.size) < self.p.p_asymp[self.age[leave_E]]
         to_Ia, to_Ip = leave_E[asymp], leave_E[~asymp]
 
+        # hosp_rate is (2, n_age): row by vaccination status, column by age. The
+        # vacc flag cast to 0/1 selects the row, self.age selects the column, so
+        # this advanced-indexing yields one probability per Is leaver.
         hosp_p = self.p.hosp_rate[self.vacc[leave_Is].astype(int), self.age[leave_Is]]
         hospitalised = self.rng.random(leave_Is.size) < hosp_p
         to_H, Is_to_R = leave_Is[hospitalised], leave_Is[~hospitalised]
@@ -276,6 +304,8 @@ class AgentModel:
         critical = self.rng.random(leave_H.size) < self.p.icu_rate[self.age[leave_H]]
         to_C, H_to_R = leave_H[critical], leave_H[~critical]
 
+        # Death probability depends on ICU occupancy at population scale (current
+        # C count times scale), then is looked up per leaver by age.
         death_prob, icu_overflow = icu_death_probability(
             float((self.state == C).sum()) * self.scale, self.p.death_rate, self.config.healthcare
         )
@@ -318,11 +348,14 @@ class AgentModel:
 
     # ----------------------------------------------------------- diagnostics
     def _make_record(self, **kw) -> StepRecord:
+        # Tally agents per state code (0..8) and lift to population scale; index
+        # with the state constants (E, IP, ...) to read each compartment total.
         counts = np.bincount(self.state, minlength=9).astype(float) * self.scale
         sus = self.state == SUS
         s_count = float((sus & ~self.vacc).sum()) * self.scale
         v_count = float((sus & self.vacc).sum()) * self.scale
 
+        # np.isin builds a boolean mask True where state is any of the three codes.
         infectious_mask = np.isin(self.state, (IP, IA, IS))
         infectious_by_age = self._counts_by_age(infectious_mask) * self.scale
         deaths_by_age = self._counts_by_age(self.state == D) * self.scale

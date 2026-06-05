@@ -21,6 +21,10 @@ from .config import Intervention
 
 def mask_mandate(start_day: int, end_day: int, reduction: float = 0.25) -> Intervention:
     """Population-wide masking. Modest, broad reduction in transmission."""
+    # Positional args map to Intervention's fields (name, start_day, end_day,
+    # transmission_reduction); .validate() returns the same instance (so it can
+    # be chained), raising if any value is out of range. All builders below
+    # follow this identical pattern with different name/default-reduction.
     return Intervention("mask_mandate", start_day, end_day, reduction).validate()
 
 

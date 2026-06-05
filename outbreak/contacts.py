@@ -48,16 +48,19 @@ def default_contact_matrix(n_age: int) -> np.ndarray:
     if n_age == 1:
         return np.array([[10.0]], dtype=float)
     if n_age == 4:
-        return DEFAULT_CONTACT_MATRIX_4.copy()
+        return DEFAULT_CONTACT_MATRIX_4.copy()  # copy so callers can't mutate the module constant
 
     # Synthetic assortative matrix for arbitrary resolutions.
     idx = np.arange(n_age)
+    # idx[:, None] is a column vector, idx[None, :] a row vector; subtracting
+    # them broadcasts to an (n_age, n_age) grid where entry [i, j] = |i - j|,
+    # i.e. how many age bands apart groups i and j are.
     distance = np.abs(idx[:, None] - idx[None, :])
     base = 8.0 * np.exp(-distance / 1.5)          # within-group mixing decays
     base += 1.0                                   # baseline community mixing
     # Slightly reduce contacts for the oldest groups.
-    age_scale = np.linspace(1.0, 0.6, n_age)
-    base *= age_scale[:, None]
+    age_scale = np.linspace(1.0, 0.6, n_age)      # 1.0 for group 0 down to 0.6 for the oldest
+    base *= age_scale[:, None]                    # scale each row i (column vector broadcasts over columns)
     return base
 
 
@@ -77,8 +80,15 @@ def symmetrize(contact_matrix: np.ndarray, population_by_age: np.ndarray) -> np.
         raise ValueError("population_by_age length must match contact matrix")
 
     # Total contacts from i to j and from j to i; average them.
+    # N[:, None] is a column vector, so multiplying scales each row i of C by N_i:
+    # total_ij[i, j] = C[i, j] * N_i = total i->j contacts.
     total_ij = C * N[:, None]                     # contacts i->j weighted by N_i
+    # Adding the transpose pairs each (i,j) total with its (j,i) counterpart;
+    # averaging forces the two directions to agree (reciprocity).
     total = 0.5 * (total_ij + total_ij.T)         # symmetric total contacts
+    # Dividing back by N_i recovers per-capita rates. errstate suppresses the
+    # divide/invalid warnings for empty groups; np.where then forces those rows
+    # (N_i == 0) to 0 instead of using the nan/inf the division produced.
     with np.errstate(divide="ignore", invalid="ignore"):
         C_sym = np.where(N[:, None] > 0, total / N[:, None], 0.0)
     return C_sym

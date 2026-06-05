@@ -57,6 +57,17 @@ pip install -r requirements.txt        # numpy, scipy, streamlit, plotly, pandas
 pip install -e .                       # installs the `outbreak` package
 ```
 
+For a **reproducible, hash-verified** environment (recommended for deployments),
+install from the lockfile instead:
+
+```bash
+pip install --require-hashes -r requirements.lock
+```
+
+`requirements.txt` lists loose minimum versions for everyday use;
+`requirements.lock` pins every direct and transitive dependency to one exact,
+fingerprinted version (see [SECURITY.md](SECURITY.md)).
+
 Python 3.9+ is required.
 
 ---
@@ -216,6 +227,27 @@ pytest                # run the full suite
   `n_agents` for fine-grained tail behaviour.
 - Default contact matrices and severity parameters are illustrative. Calibrate to
   empirical data for any quantitative use.
+
+---
+
+## Security & deployment
+
+Outbreak is built to run **locally, for a single user**, and has no
+authentication by default.
+
+- **Untrusted snapshots are handled safely.** Saved/uploaded run snapshots are
+  treated as untrusted input: the UI caps the upload size *before* parsing,
+  every restored field is shape- and range-checked (`outbreak/epidemiology.py`
+  `restore_array`, plus each engine's `set_state`), and malformed files surface a
+  friendly error instead of a crash. There is no `eval`/`exec`, `pickle`,
+  `subprocess` or network I/O anywhere in the codebase.
+- **Dependencies are lockable.** `requirements.lock` pins every dependency to an
+  exact, hash-verified version for reproducible, tamper-evident installs.
+- **Before exposing it publicly**, front the app with access control and
+  per-request resource limits (large populations / ensembles are compute-heavy).
+
+A full, jargon-free explanation of these measures is in
+[SECURITY.md](SECURITY.md).
 
 ## License
 
