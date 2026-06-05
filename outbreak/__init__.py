@@ -1,0 +1,53 @@
+"""Outbreak: a realistic, age-structured stochastic SEIR epidemic simulator.
+
+Quick start
+-----------
+>>> from outbreak import Simulation, preset_scenario
+>>> scenario = preset_scenario("covid_like", total_population=500_000)
+>>> sim = Simulation(scenario)
+>>> sim.run_to_end()
+>>> summary = sim.summary()
+>>> round(summary.attack_rate, 2)  # doctest: +SKIP
+0.78
+"""
+
+from .config import (
+    DiseaseConfig,
+    HealthcareConfig,
+    Intervention,
+    InterventionConfig,
+    PopulationConfig,
+    ScenarioConfig,
+    SimulationConfig,
+    VaccinationConfig,
+    DISEASE_PRESETS,
+    preset_scenario,
+)
+from .metrics import EpidemicSummary, aggregate_ensemble, history_to_columns, summarize
+from .model import EpidemicModel, StepRecord
+from .simulation import RunState, Simulation, run_ensemble
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "ScenarioConfig",
+    "PopulationConfig",
+    "DiseaseConfig",
+    "VaccinationConfig",
+    "InterventionConfig",
+    "Intervention",
+    "HealthcareConfig",
+    "SimulationConfig",
+    "DISEASE_PRESETS",
+    "preset_scenario",
+    "EpidemicModel",
+    "StepRecord",
+    "Simulation",
+    "RunState",
+    "run_ensemble",
+    "EpidemicSummary",
+    "summarize",
+    "aggregate_ensemble",
+    "history_to_columns",
+    "__version__",
+]
