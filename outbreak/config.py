@@ -37,10 +37,12 @@ PerAge = Union[Number, Sequence[Number]]
 
 def _as_array(value: PerAge, n_age: int, name: str) -> np.ndarray:
     """Coerce a scalar or per-age sequence into a float array of length n_age."""
+    # atleast_1d turns a bare scalar (e.g. 0.35) into a length-1 array so the
+    # broadcast/length logic below can treat scalar and sequence inputs uniformly.
     arr = np.atleast_1d(np.asarray(value, dtype=float))
     if arr.size == 1:
-        arr = np.repeat(arr, n_age)
-    if arr.size != n_age:
+        arr = np.repeat(arr, n_age)  # broadcast a single scalar to one value per age group
+    if arr.size != n_age:  # otherwise the caller gave a wrong-length sequence
         raise ValueError(
             f"{name!r} must be a scalar or have length {n_age}, got length {arr.size}"
         )
@@ -48,6 +50,7 @@ def _as_array(value: PerAge, n_age: int, name: str) -> np.ndarray:
 
 
 def _check_prob(arr: np.ndarray, name: str) -> None:
+    # np.any reduces an element-wise comparison over the whole array to one bool.
     if np.any(arr < 0.0) or np.any(arr > 1.0):
         raise ValueError(f"{name!r} must be a probability in [0, 1]")
 
@@ -61,6 +64,8 @@ def _check_positive(value: float, name: str) -> None:
 # Population
 # ---------------------------------------------------------------------------
 
+# @dataclass auto-generates __init__/__repr__/__eq__ from the annotated fields
+# below; each field's value is its default.
 @dataclass
 class PopulationConfig:
     """Population size, age structure and initial seeding.
@@ -77,6 +82,8 @@ class PopulationConfig:
     # Fraction of the population already immune at t=0 (prior infection/vaccine).
     initial_immune_fraction: float = 0.0
 
+    # __post_init__ runs automatically right after the generated __init__, so it
+    # is the hook for validating/normalising the supplied field values.
     def __post_init__(self) -> None:
         if self.total_population <= 0:
             raise ValueError("total_population must be > 0")
@@ -87,11 +94,13 @@ class PopulationConfig:
         if not 0.0 <= self.initial_immune_fraction < 1.0:
             raise ValueError("initial_immune_fraction must be in [0, 1)")
 
+        # The defaults are None (not a mutable list) on the dataclass; fill them
+        # in here only when the caller left both unset.
         if self.age_group_labels is None or self.age_distribution is None:
             self.age_group_labels = list(DEFAULT_AGE_LABELS)
             self.age_distribution = list(DEFAULT_AGE_DISTRIBUTION)
 
-        self.age_group_labels = list(self.age_group_labels)
+        self.age_group_labels = list(self.age_group_labels)  # copy into a list we own
         dist = np.asarray(self.age_distribution, dtype=float)
         if len(self.age_group_labels) != dist.size:
             raise ValueError("age_group_labels and age_distribution length mismatch")
@@ -99,9 +108,9 @@ class PopulationConfig:
             raise ValueError("at least one age group is required")
         if np.any(dist < 0):
             raise ValueError("age_distribution entries must be non-negative")
-        if not np.isclose(dist.sum(), 1.0):
+        if not np.isclose(dist.sum(), 1.0):  # tolerant float equality vs exactly 1.0
             dist = dist / dist.sum()  # normalise defensively
-        self.age_distribution = dist.tolist()
+        self.age_distribution = dist.tolist()  # store as plain list (JSON-friendly)
 
     @property
     def n_age(self) -> int:
@@ -110,13 +119,14 @@ class PopulationConfig:
     def population_by_age(self) -> np.ndarray:
         """Integer population in each age group, summing to total_population."""
         dist = np.asarray(self.age_distribution, dtype=float)
-        raw = dist * self.total_population
-        counts = np.floor(raw).astype(np.int64)
+        raw = dist * self.total_population         # ideal (fractional) counts
+        counts = np.floor(raw).astype(np.int64)    # round down, leaving a shortfall
         # Distribute the rounding remainder to the largest fractional parts.
         remainder = self.total_population - int(counts.sum())
         if remainder > 0:
+            # argsort of the negated fractional parts => indices ordered largest-first.
             order = np.argsort(-(raw - counts))
-            counts[order[:remainder]] += 1
+            counts[order[:remainder]] += 1         # give +1 to the top `remainder` groups
         return counts
 
 
@@ -161,6 +171,8 @@ class DiseaseConfig:
 
     def validate(self, n_age: int) -> "DiseaseConfig":
         _check_positive(self.r0, "r0")
+        # Loop over field names and validate each via getattr, avoiding a wall of
+        # near-identical checks. Returns self so callers can chain .validate().
         for fld in (
             "latent_period",
             "presymptomatic_period",
@@ -184,10 +196,14 @@ class DiseaseConfig:
             "icu_rate",
             "death_rate",
         ):
+            # _as_array first broadcasts scalar-or-per-age input to length n_age,
+            # then _check_prob verifies every entry lies in [0, 1].
             _check_prob(_as_array(getattr(self, fld), n_age, fld), fld)
         return self
 
     # Per-age resolved arrays -------------------------------------------------
+    # Each accessor returns the field expanded to a length-n_age float array,
+    # regardless of whether the user supplied a scalar or a per-age sequence.
     def asymptomatic_fraction_arr(self, n_age: int) -> np.ndarray:
         return _as_array(self.asymptomatic_fraction, n_age, "asymptomatic_fraction")
 
@@ -265,14 +281,20 @@ class Intervention:
         return self
 
     def is_active(self, day: int) -> bool:
+        # Half-open interval [start_day, end_day): active on start_day, not on end_day.
         return self.start_day <= day < self.end_day
 
 
 @dataclass
 class InterventionConfig:
+    # default_factory=list gives each instance its own fresh list; a bare
+    # `= []` default would be shared across all instances (the classic mutable
+    # default-argument bug).
     interventions: Sequence[Intervention] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        # Accept either Intervention objects or plain dicts (e.g. from a loaded
+        # JSON scenario); turn any dict into an Intervention via **kwargs unpacking.
         self.interventions = [
             i if isinstance(i, Intervention) else Intervention(**i)
             for i in self.interventions
@@ -291,7 +313,7 @@ class InterventionConfig:
         m = 1.0
         for i in self.interventions:
             if i.is_active(day):
-                m *= (1.0 - i.transmission_reduction)
+                m *= (1.0 - i.transmission_reduction)  # stack reductions multiplicatively
         return m
 
 
@@ -333,10 +355,25 @@ class SimulationConfig:
     dt: float = 1.0                # time step in days
     stochastic: bool = True        # binomial transitions vs deterministic expectations
     # Overdispersion of transmission (superspreading). ``None`` disables it;
-    # smaller values => more overdispersion. Interpreted as the shape of a
-    # mean-one Gamma multiplier applied to the daily force of infection.
+    # smaller values => more overdispersion. In the compartmental engine this is
+    # the shape of a mean-one Gamma multiplier on the daily force of infection;
+    # in the agent engine it is the shape of a per-agent mean-one infectiousness
+    # multiplier (so a few individuals drive most transmission).
     overdispersion: Optional[float] = 0.5
     seed: Optional[int] = None
+
+    # Which engine advances the epidemic:
+    #   "compartmental" - fast age-structured stochastic SEIR (default)
+    #   "agent"         - individual-based model (see outbreak.agents)
+    engine: str = "compartmental"
+    # Agent engine only: number of simulated individuals. When smaller than the
+    # total population the model simulates a representative sample and scales its
+    # reported counts up to population scale (keeps large populations tractable).
+    n_agents: int = 100_000
+
+    # Class-level tuple (no type annotation), so it's a shared constant rather
+    # than a per-instance dataclass field.
+    ENGINES = ("compartmental", "agent")
 
     def validate(self) -> "SimulationConfig":
         if self.duration_days <= 0:
@@ -344,10 +381,17 @@ class SimulationConfig:
         _check_positive(self.dt, "dt")
         if self.overdispersion is not None and self.overdispersion <= 0:
             raise ValueError("overdispersion must be > 0 or None")
+        if self.engine not in self.ENGINES:
+            raise ValueError(
+                f"engine must be one of {self.ENGINES}, got {self.engine!r}"
+            )
+        if self.n_agents <= 0:
+            raise ValueError("n_agents must be > 0")
         return self
 
     @property
     def n_steps(self) -> int:
+        # Round up so the final partial step still covers the full duration.
         return int(np.ceil(self.duration_days / self.dt))
 
 
@@ -359,6 +403,9 @@ class SimulationConfig:
 class ScenarioConfig:
     """The complete description of a simulation scenario."""
 
+    # default_factory=<class> constructs a fresh sub-config per instance (calling
+    # the class with no args); these nested dataclasses can't be plain defaults
+    # because they are mutable.
     population: PopulationConfig = field(default_factory=PopulationConfig)
     disease: DiseaseConfig = field(default_factory=DiseaseConfig)
     vaccination: VaccinationConfig = field(default_factory=VaccinationConfig)
@@ -378,7 +425,7 @@ class ScenarioConfig:
         self.simulation.validate()
         if self.contact_matrix is not None:
             cm = np.asarray(self.contact_matrix, dtype=float)
-            if cm.shape != (n_age, n_age):
+            if cm.shape != (n_age, n_age):  # must be a square matrix, one row/col per age group
                 raise ValueError(
                     f"contact_matrix must be {n_age}x{n_age}, got {cm.shape}"
                 )
@@ -388,14 +435,20 @@ class ScenarioConfig:
 
     # Serialisation -----------------------------------------------------------
     def to_dict(self) -> dict:
+        # asdict recursively converts this dataclass and all nested dataclasses
+        # into plain (JSON-serialisable) dicts.
         d = asdict(self)
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScenarioConfig":
-        d = dict(d)
+        # Inverse of to_dict: rebuild the nested dataclasses from a plain dict.
+        d = dict(d)  # shallow copy so we don't mutate the caller's dict
+        # `or {}` falls back to an empty dict when the key is missing or None.
         interventions = d.get("interventions") or {}
         scenario = cls(
+            # **d.get("population", {}) unpacks the sub-dict as keyword args;
+            # a missing section defaults to {}, so all dataclass defaults apply.
             population=PopulationConfig(**d.get("population", {})),
             disease=DiseaseConfig(**d.get("disease", {})),
             vaccination=VaccinationConfig(**d.get("vaccination", {})),
@@ -406,7 +459,7 @@ class ScenarioConfig:
             simulation=SimulationConfig(**d.get("simulation", {})),
             contact_matrix=d.get("contact_matrix"),
         )
-        return scenario.validate()
+        return scenario.validate()  # re-validate after reconstruction
 
 
 # ---------------------------------------------------------------------------
