@@ -273,6 +273,27 @@ This first version forms households by grouping people at random and applies any
 interventions evenly across all settings; modelling realistic family makeup and
 closing *only* schools (for example) are natural next steps.
 
+### Realistic stage durations
+
+How long someone stays in each phase (incubating, infectious, in hospital, …)
+isn't fixed — it varies person to person. A simple model assumes those durations
+are *exponential*, which is mathematically convenient but unrealistic: it implies
+some people leave a stage almost instantly and a few linger for an absurdly long
+time. For example, with a 14-day incubation it would have ~7% of people turning
+infectious within a day and ~10% still incubating after a month.
+
+The detailed (agent) engine instead gives **each person an explicit, realistically
+clustered duration** for every stage, controlled by a single "peakedness" knob
+(`duration_dispersion`): 1 reproduces the old exponential behaviour, while higher
+values (the built-in diseases use 4–6) make durations cluster tightly around their
+average — almost nobody leaves in a day, almost nobody lingers for a month. The
+average length is unchanged, so **R₀ and the eventual size of the epidemic stay
+the same** — but the epidemic's *timing* sharpens (a taller, earlier peak), which
+matters for hospital surges and the timing of interventions.
+
+(The fast compartmental engine uses exponential durations intrinsically; this
+realism is an agent-engine feature.)
+
 ---
 
 ## Project layout
@@ -303,7 +324,7 @@ outbreak/
 | Group | What it controls (in plain terms) |
 |-------|-----------------------------------|
 | **Population** | How many people, their age mix, how many are infected at the start, and how many are already immune. |
-| **Disease** | How contagious it is (R₀); how long each phase lasts; how infectious people are before/without symptoms; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
+| **Disease** | How contagious it is (R₀); how long each phase lasts (and how tightly those durations cluster around their average); how infectious people are before/without symptoms; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
 | **Vaccination** | When the rollout starts, how fast, the coverage limit, whether the elderly go first, and how well the vaccine blocks infection / severe illness / onward spread. |
 | **Interventions** | When measures (e.g. a lockdown) start and end, and how much they cut transmission. |
 | **Healthcare** | Number of hospital and ICU beds, and how much the death rate rises when they overflow. |
@@ -332,7 +353,10 @@ among other things, that:
 - **the two engines agree** — the detailed engine reproduces the fast engine's
   results to within a few percent, confirming they describe the same disease;
 - **contact networks keep the maths honest** — switching them on still hits the
-  R₀ you asked for, and produces the lower, later "flatten the curve" peak.
+  R₀ you asked for, and produces the lower, later "flatten the curve" peak;
+- **realistic stage durations preserve R₀ and final size** — making per-stage
+  durations peaked rather than exponential leaves the R₀ and eventual attack rate
+  unchanged, while sharpening the epidemic peak.
 
 As a maths check, the smooth (luck-free) mode lands on the textbook answer for
 the final size of an epidemic. For example, for R₀ = 2.5 the textbook says 89.3%

@@ -111,6 +111,13 @@ def build_scenario() -> ScenarioConfig:
                              float(base_disease.rel_infectiousness_asymptomatic), 0.05)
         asym_frac = st.slider("Asymptomatic fraction (mean)", 0.0, 0.95,
                               float(np.mean(base_disease.asymptomatic_fraction_arr(4))), 0.05)
+        duration_dispersion = st.slider(
+            "Stage-duration peakedness (shape)", 1.0, 10.0,
+            float(base_disease.duration_dispersion), 0.5,
+            help="How tightly each stage's duration clusters around its mean. "
+                 "1 = exponential (very variable); higher = realistic, peaked "
+                 "durations. Used by the agent engine.",
+        )
         waning_on = st.checkbox("Waning immunity",
                                 value=base_disease.waning_immunity_days is not None)
         # `disabled=not waning_on` greys out the slider when the checkbox is off;
@@ -220,6 +227,7 @@ def build_scenario() -> ScenarioConfig:
             asymptomatic_fraction=asym_frac,
             hospitalization_rate=hosp, icu_rate=icu, death_rate=death,
             waning_immunity_days=(waning_days if waning_on else None),
+            duration_dispersion=duration_dispersion,
         ),
         vaccination=VaccinationConfig(
             enabled=vacc_enabled, start_day=int(vacc_start), daily_rate=vacc_rate,
