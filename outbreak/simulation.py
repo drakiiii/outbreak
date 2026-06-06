@@ -143,10 +143,10 @@ class Simulation:
 
     # --------------------------------------------------------------- analysis
     def summary(self) -> Optional[EpidemicSummary]:
-        return summarize(self.history, self.r0)
+        return summarize(self.history, self.r0, self.config.reporting)
 
     def to_columns(self) -> dict:
-        return history_to_columns(self.history)
+        return history_to_columns(self.history, self.config.reporting)
 
     def record_at_day(self, day: float) -> Optional[StepRecord]:
         """Return the recorded state nearest to ``day`` (for timeline scrubbing)."""

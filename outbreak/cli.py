@@ -25,7 +25,7 @@ from typing import List, Optional, Sequence
 import numpy as np
 
 from .config import DISEASE_PRESETS, NetworkConfig, ScenarioConfig, preset_scenario
-from .metrics import history_to_columns, summarize
+from .metrics import summarize
 from .simulation import Simulation, run_ensemble
 
 
@@ -69,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Random seed, for repeatable runs.")
     run.add_argument("--ensemble", type=int, default=None, metavar="N",
                      help="Run N random repeats and report the median and range.")
+    run.add_argument("--ascertainment", type=float, default=None,
+                     help="Surveillance: fraction of symptomatic cases reported (0-1).")
+    run.add_argument("--reporting-delay", type=float, default=None,
+                     help="Surveillance: mean days from symptom onset to report.")
 
     # What to do with the results.
     out = p.add_argument_group("output")
@@ -121,6 +125,11 @@ def _build_scenario(args: argparse.Namespace) -> ScenarioConfig:
             print("note: --network only affects the agent engine; ignoring for "
                   f"the {sim.engine} engine.", file=sys.stderr)
 
+    if args.ascertainment is not None:
+        scenario.reporting.ascertainment = args.ascertainment
+    if args.reporting_delay is not None:
+        scenario.reporting.reporting_delay_days = args.reporting_delay
+
     return scenario.validate()
 
 
@@ -133,6 +142,7 @@ def _summary_lines(summary) -> List[str]:
         f"  Total infections     : {s.total_infections:,.0f} "
         f"({100 * s.attack_rate:.1f}% of population)",
         f"  Symptomatic cases    : {s.total_symptomatic:,.0f}",
+        f"  Reported cases       : {s.total_reported:,.0f}",
         f"  Hospitalisations     : {s.total_hospitalizations:,.0f}",
         f"  ICU admissions       : {s.total_icu:,.0f}",
         f"  Deaths               : {s.total_deaths:,.0f} "
@@ -149,8 +159,7 @@ def _summary_lines(summary) -> List[str]:
     return lines
 
 
-def _write_timeseries_csv(history, path: str) -> None:
-    cols = history_to_columns(history)
+def _write_timeseries_csv(cols: dict, path: str) -> None:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(cols.keys())                 # header row
@@ -167,7 +176,7 @@ def _run_single(scenario: ScenarioConfig, args: argparse.Namespace) -> int:
         print("\n".join(_summary_lines(summary)))
 
     if args.csv:
-        _write_timeseries_csv(sim.history, args.csv)
+        _write_timeseries_csv(sim.to_columns(), args.csv)   # includes reported_cases
         if not args.quiet:
             print(f"\nWrote time series ({len(sim.history)} rows) to {args.csv}")
     if args.json_path:

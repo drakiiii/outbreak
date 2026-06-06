@@ -433,6 +433,36 @@ class EnvironmentConfig:
 
 
 # ---------------------------------------------------------------------------
+# Detection / reporting (observation layer)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ReportingConfig:
+    """How true infections become *observed* cases — a surveillance layer.
+
+    Real case data is incomplete and delayed: only a fraction of infections are
+    ever detected, and reports lag symptom onset by a few days. This turns the
+    model's (unobservable) true symptomatic incidence into a **reported-cases**
+    series you can compare against real surveillance data. It is applied as a
+    post-processing transform of the run history, so it changes only the reported
+    outputs, never the underlying dynamics.
+
+    The default (``ascertainment = 1``, no delay) makes reported cases equal true
+    symptomatic onsets.
+    """
+
+    ascertainment: float = 1.0          # fraction of symptomatic cases reported
+    reporting_delay_days: float = 0.0   # mean lag from symptom onset to report
+
+    def validate(self) -> "ReportingConfig":
+        if not 0.0 <= self.ascertainment <= 1.0:
+            raise ValueError("ascertainment must be in [0, 1]")
+        if self.reporting_delay_days < 0:
+            raise ValueError("reporting_delay_days must be >= 0")
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Contact network (agent engine only)
 # ---------------------------------------------------------------------------
 
@@ -583,6 +613,7 @@ class ScenarioConfig:
     interventions: InterventionConfig = field(default_factory=InterventionConfig)
     healthcare: HealthcareConfig = field(default_factory=HealthcareConfig)
     environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+    reporting: ReportingConfig = field(default_factory=ReportingConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     # Optional explicit contact matrix (n_age x n_age). If None, a default is
@@ -596,6 +627,7 @@ class ScenarioConfig:
         self.interventions.validate()
         self.healthcare.validate()
         self.environment.validate()
+        self.reporting.validate()
         self.network.validate(n_age)
         self.simulation.validate()
         if self.contact_matrix is not None:
@@ -632,6 +664,7 @@ class ScenarioConfig:
             ),
             healthcare=HealthcareConfig(**d.get("healthcare", {})),
             environment=EnvironmentConfig(**d.get("environment", {})),
+            reporting=ReportingConfig(**d.get("reporting", {})),
             network=NetworkConfig(**d.get("network", {})),
             simulation=SimulationConfig(**d.get("simulation", {})),
             contact_matrix=d.get("contact_matrix"),

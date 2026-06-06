@@ -40,6 +40,7 @@ below appears later in this README.
 | **Stochastic vs. deterministic** | *Stochastic* means chance is included, so every run comes out a little different (like real life). *Deterministic* means the smooth, luck-free average. |
 | **Ensemble** | Running the chance-based version many times and looking at the **range** of possible outcomes, not just one. |
 | **Contact network** | Who you actually meet: the same household, classroom and workplace each day, rather than bumping into random strangers. |
+| **Reported vs. true cases** | The *true* number infected is never fully seen in reality; surveillance only catches *some* cases, *late*. The model can report both — true infections and the "observed" case count. |
 
 That's the whole vocabulary. The rest of this page uses these words freely, but
 always means exactly what's in this table.
@@ -333,6 +334,7 @@ outbreak/
 | **Interventions** | When measures (e.g. a lockdown) start and end, and how much they cut transmission. |
 | **Healthcare** | Number of hospital and ICU beds, and how much the death rate rises when they overflow. |
 | **Environment** | Seasonal swing in transmissibility (amplitude, period, peak day) and an external/spillover infection rate (importations or an animal reservoir). |
+| **Reporting** | Surveillance realism: what fraction of cases are detected (ascertainment) and the reporting delay — produces an "observed cases" series. |
 | **Network** (detailed engine) | Whether to switch on households/schools/workplaces, their typical sizes, which ages attend school or work, and how much spread happens in each setting. |
 | **Simulation** | How many days to run, the random seed (for repeatable runs), whether to include randomness, and which engine to use. |
 
@@ -551,6 +553,18 @@ engines:
   This lets outbreaks **start with no initial cases**, **re-ignite after
   fade-out**, or **persist even when person-to-person spread alone (R₀ < 1) would
   die out** — the missing ingredient for reservoir-driven diseases.
+
+### Detection and reporting (observed cases)
+
+The compartments above are the *true* epidemic, which is never fully observed in
+reality. A `ReportingConfig` adds a **surveillance layer**: reported cases are
+symptomatic onsets thinned by an `ascertainment` fraction (only some cases are
+detected) and pushed back by a `reporting_delay_days` lag. This produces a
+**reported-cases** series — what real case data would look like — alongside the
+true incidence, so you can compare against observed data (and it's what the
+calibration tooling fits to). It's a pure post-processing transform of the run
+history, so it changes only the reported outputs, never the dynamics. The default
+(ascertainment 1, no delay) makes reported cases equal true symptomatic onsets.
 
 ### Waning immunity and reinfection
 

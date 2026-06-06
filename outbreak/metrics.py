@@ -50,6 +50,11 @@ class EpidemicSummary:
     rt_crossed_one_day: Optional[float]   # first day Rt drops below 1
     epidemic_over_day: Optional[float]    # first day with zero active infections
 
+    # Observation layer: cases an imperfect surveillance system would report.
+    total_reported: float
+    peak_reported: float
+    peak_reported_day: Optional[float]
+
     def as_dict(self) -> dict:
         return self.__dict__.copy()
 
@@ -60,7 +65,29 @@ def _series(history: Sequence[StepRecord], attr: str) -> np.ndarray:
     return np.array([getattr(r, attr) for r in history], dtype=float)
 
 
-def summarize(history: Sequence[StepRecord], r0: float) -> Optional[EpidemicSummary]:
+def reported_incidence(history: Sequence[StepRecord], reporting=None) -> np.ndarray:
+    """Daily *reported* cases: symptomatic onsets thinned and delayed.
+
+    Models surveillance as detecting a fraction (``ascertainment``) of symptomatic
+    cases, after a reporting delay. With the default reporting (ascertainment 1,
+    no delay) this equals true symptomatic incidence.
+    """
+    sym = _series(history, "new_symptomatic")
+    if reporting is None or len(history) == 0:
+        return sym.copy()
+    rep = reporting.ascertainment * sym
+    days = _series(history, "day")
+    dt = float(days[1] - days[0]) if len(days) > 1 else 1.0
+    shift = int(round(reporting.reporting_delay_days / dt))
+    if shift > 0:
+        # Push each day's reports later by `shift` steps (zero-padded at the front).
+        delayed = np.zeros_like(rep)
+        delayed[shift:] = rep[: rep.size - shift]
+        rep = delayed
+    return rep
+
+
+def summarize(history: Sequence[StepRecord], r0: float, reporting=None) -> Optional[EpidemicSummary]:
     """Compute an :class:`EpidemicSummary` from a list of step records."""
     if not history:
         return None  # nothing to summarise for an empty run
@@ -102,6 +129,10 @@ def summarize(history: Sequence[StepRecord], r0: float) -> Optional[EpidemicSumm
     peak_hosp, peak_hosp_day = _peak(hosp_occ)
     peak_icu, peak_icu_day = _peak(icu_occ)
     peak_daily_inf, peak_daily_inf_day = _peak(new_inf)
+
+    # Observed (reported) cases under the surveillance model.
+    reported = reported_incidence(history, reporting)
+    peak_reported, peak_reported_day = _peak(reported)
 
     # First day Rt falls below 1 after the epidemic has started growing.
     rt_cross = None
@@ -145,10 +176,13 @@ def summarize(history: Sequence[StepRecord], r0: float) -> Optional[EpidemicSumm
         peak_rt=float(rt.max()) if rt.size else 0.0,
         rt_crossed_one_day=rt_cross,
         epidemic_over_day=over_day,
+        total_reported=float(reported.sum()),
+        peak_reported=peak_reported,
+        peak_reported_day=peak_reported_day,
     )
 
 
-def history_to_columns(history: Sequence[StepRecord]) -> dict:
+def history_to_columns(history: Sequence[StepRecord], reporting=None) -> dict:
     """Return the full time series as a dict of equal-length lists.
 
     Convenient for building a DataFrame, plotting, or CSV export without taking
@@ -171,6 +205,8 @@ def history_to_columns(history: Sequence[StepRecord]) -> dict:
     ).tolist()
     # cumsum gives the running total of new infections (cumulative incidence).
     cols["cumulative_infections"] = np.cumsum(_series(history, "new_infections")).tolist()
+    # Observed cases under the surveillance model (= symptomatic onsets by default).
+    cols["reported_cases"] = reported_incidence(history, reporting).tolist()
     return cols
 
 

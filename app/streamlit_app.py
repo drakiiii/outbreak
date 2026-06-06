@@ -36,6 +36,7 @@ from outbreak.config import (
     InterventionConfig,
     NetworkConfig,
     PopulationConfig,
+    ReportingConfig,
     ScenarioConfig,
     SimulationConfig,
     VaccinationConfig,
@@ -171,6 +172,12 @@ def build_scenario() -> ScenarioConfig:
                                help="How susceptible the youngest age group is to infection, "
                                     "relative to adults (1.0 = same).")
 
+    with st.sidebar.expander("Surveillance (reported cases)"):
+        st.caption("How true infections appear in case data: under-reporting and delay.")
+        ascertainment = st.slider("Ascertainment (% of symptomatic reported)", 1, 100, 100, 1,
+                                  help="Fraction of symptomatic cases that get detected.") / 100.0
+        reporting_delay = st.number_input("Reporting delay (days)", 0, 30, 0, 1)
+
     with st.sidebar.expander("Healthcare capacity"):
         cap_enabled = st.checkbox("Limit ICU capacity", value=False)
         icu_capacity = st.number_input("ICU beds", 0, 1_000_000, 500, 50,
@@ -266,6 +273,9 @@ def build_scenario() -> ScenarioConfig:
             # cases per 100k/day -> per-susceptible daily hazard.
             external_infection_rate=(spillover_per_100k / 100_000.0 if spillover_on else 0.0),
         ),
+        reporting=ReportingConfig(
+            ascertainment=ascertainment, reporting_delay_days=float(reporting_delay),
+        ),
         network=NetworkConfig(
             enabled=bool(net_enabled), household_weight=hh_w, school_weight=sch_w,
             workplace_weight=wrk_w, community_weight=com_w,
@@ -310,8 +320,13 @@ def plot_epidemic_curve(df: pd.DataFrame, capacity=None) -> go.Figure:
 def plot_incidence(df: pd.DataFrame) -> go.Figure:
     # Daily new infections (bars) and new deaths (line on a secondary y-axis).
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=df["day"], y=df["new_infections"], name="New infections",
+    fig.add_trace(go.Bar(x=df["day"], y=df["new_infections"], name="New infections (true)",
                          marker_color="#e45756"))
+    # Reported cases — what surveillance would actually observe (under-reported /
+    # delayed). Only distinct from true symptomatic onsets when reporting is set.
+    if "reported_cases" in df:
+        fig.add_trace(go.Scatter(x=df["day"], y=df["reported_cases"], name="Reported cases",
+                                 line=dict(color="#f58518", dash="dot")))
     fig.add_trace(go.Scatter(x=df["day"], y=df["new_deaths"], name="New deaths",
                              yaxis="y2", line=dict(color="#333333")))
     fig.update_layout(

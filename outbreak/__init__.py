@@ -21,6 +21,7 @@ from .config import (
     InterventionConfig,
     NetworkConfig,
     PopulationConfig,
+    ReportingConfig,
     ScenarioConfig,
     SimulationConfig,
     VaccinationConfig,
@@ -28,7 +29,13 @@ from .config import (
     preset_scenario,
 )
 from .agents import AgentModel
-from .metrics import EpidemicSummary, aggregate_ensemble, history_to_columns, summarize
+from .metrics import (
+    EpidemicSummary,
+    aggregate_ensemble,
+    history_to_columns,
+    reported_incidence,
+    summarize,
+)
 from .model import EpidemicModel, StepRecord
 from .simulation import RunState, Simulation, build_engine, run_ensemble
 
@@ -45,6 +52,7 @@ __all__ = [
     "Intervention",
     "HealthcareConfig",
     "EnvironmentConfig",
+    "ReportingConfig",
     "NetworkConfig",
     "SimulationConfig",
     "DISEASE_PRESETS",
@@ -60,5 +68,6 @@ __all__ = [
     "summarize",
     "aggregate_ensemble",
     "history_to_columns",
+    "reported_incidence",
     "__version__",
 ]
