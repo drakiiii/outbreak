@@ -131,6 +131,56 @@ range of possible outcomes.
 
 ---
 
+## The scriptable way: the command line
+
+For quick runs and automation you can use the `outbreak` command — no code, no
+browser. It works straight away with `python -m outbreak …`, or as a bare
+`outbreak …` command once installed (`pip install -e .`):
+
+```bash
+# Run a COVID-like disease in 1,000,000 people for a year and print a summary:
+python -m outbreak --preset covid_like --population 1000000 --days 365
+
+# Save the full day-by-day results to a spreadsheet, and the headline numbers to JSON:
+python -m outbreak --preset influenza_like --csv results.csv --json summary.json
+
+# Use the detailed engine with households/schools/workplaces switched on:
+python -m outbreak --engine agent --n-agents 100000 --network \
+    --initial-infected 500 --r0 1.8
+
+# Run 50 random repeats and report the median and range across them:
+python -m outbreak --preset covid_like --ensemble 50
+```
+
+A single run prints a summary like:
+
+```
+=== covid_like · compartmental engine ===
+  Population            : 1,000,000
+  Total infections      : 780,123 (78.0% of population)
+  Deaths                : 2,450 (IFR 0.31%)
+  Peak infectious       : 161,000 on day 96
+  Peak ICU occupancy    : 690
+  Rt fell below 1 on    : day 110
+```
+
+Useful options (see `python -m outbreak --help` for the full list):
+
+| Option | What it does |
+|--------|--------------|
+| `--preset {covid_like,influenza_like,measles_like}` | Disease to start from. |
+| `--scenario FILE.json` | Load a scenario (or a saved run) instead of a preset. |
+| `--population`, `--initial-infected`, `--r0`, `--days` | Override the basics. |
+| `--engine {compartmental,agent}`, `--n-agents`, `--network` | Choose and configure the engine. |
+| `--ensemble N` | Run N random repeats; report median + range. |
+| `--csv FILE`, `--json FILE`, `--quiet` | Save results / suppress the printout. |
+| `--seed N`, `--no-stochastic` | Make runs repeatable, or run the smooth (luck-free) version. |
+
+> Tip: with the **agent** engine, start with a healthy number of cases (e.g.
+> `--initial-infected 500`) — a handful of cases can fizzle out purely by chance.
+
+---
+
 ## The flexible way: from Python
 
 You can also drive Outbreak in a few lines of code. Start from a built-in disease
@@ -238,7 +288,9 @@ outbreak/
 │   ├── network.py            # households / schools / workplaces for the detailed engine
 │   ├── interventions.py      # ready-made measures (mask mandate, lockdown, ...)
 │   ├── metrics.py            # turns a run into headline numbers (attack rate, peaks, ...)
-│   └── simulation.py         # the play/pause/step/save controller
+│   ├── simulation.py         # the play/pause/step/save controller
+│   ├── cli.py                # the command-line interface (`outbreak …`)
+│   └── __main__.py           # lets `python -m outbreak …` work
 ├── app/streamlit_app.py      # the interactive browser dashboard
 ├── examples/demo.py          # a runnable, no-interface demonstration
 └── tests/                    # the automated checks that keep it correct

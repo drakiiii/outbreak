@@ -20,6 +20,11 @@ dependencies = [
 ui = ["streamlit>=1.30", "plotly>=5.18", "pandas>=2.0"]
 dev = ["pytest>=7.0"]
 
+# Installs an `outbreak` command on the PATH (pip install -e .) that calls
+# outbreak.cli:main. `python -m outbreak` works without installing, via __main__.
+[project.scripts]
+outbreak = "outbreak.cli:main"
+
 [tool.setuptools]
 packages = ["outbreak"]
 
