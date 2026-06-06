@@ -83,12 +83,15 @@ def build_layers(config: NetworkConfig, age: np.ndarray, rng: np.random.Generato
     layers: List[ContactLayer] = []
 
     # Households: partition *all* agents into small groups by sampling sizes from
-    # the configured distribution.
-    hh = _household_ids(n, config.household_size_distribution, rng)
+    # the configured distribution. With age-structured households, each household
+    # gets an adult where possible so children live with adults (inter-generational
+    # mixing) rather than being grouped at random.
+    school_ages = config.resolved_school_groups(n_age)
+    hh = _household_ids(age, config.household_size_distribution, rng,
+                        child_ages=school_ages if config.age_structured_households else None)
     layers.append(ContactLayer("household", hh, config.household_weight, density_dependent=True))
 
     # Schools: only school-age agents; the rest get -1.
-    school_ages = config.resolved_school_groups(n_age)
     school = _setting_ids(age, school_ages, config.mean_school_size, rng)
     layers.append(ContactLayer("school", school, config.school_weight, density_dependent=False))
 
@@ -100,28 +103,57 @@ def build_layers(config: NetworkConfig, age: np.ndarray, rng: np.random.Generato
     return layers
 
 
-def _household_ids(n: int, size_dist, rng: np.random.Generator) -> np.ndarray:
-    """Assign each of ``n`` agents to a household by sampling household sizes."""
+def _household_sizes(n: int, size_dist, rng: np.random.Generator) -> np.ndarray:
+    """Sample a set of household sizes that sum to exactly ``n``."""
     probs = np.asarray(size_dist, dtype=float)
     probs = probs / probs.sum()
     sizes_values = np.arange(1, probs.size + 1)        # household sizes 1..K
-
     # Sample more sizes than we could possibly need (mean size >= 1, so n draws
     # is always enough), then take the prefix whose cumulative size first reaches n.
     draw = rng.choice(sizes_values, size=n, p=probs)
     cumulative = np.cumsum(draw)
     n_households = int(np.searchsorted(cumulative, n, side="left") + 1)
     sizes = draw[:n_households].copy()
-    # Trim the final household so the sizes sum to exactly n.
-    overshoot = int(sizes.sum() - n)
-    sizes[-1] -= overshoot
+    sizes[-1] -= int(sizes.sum() - n)                  # trim the last to sum to n
+    return sizes
 
-    # Expand [s0, s1, ...] into per-agent household ids [0]*s0 + [1]*s1 + ...,
-    # then shuffle so household membership is not correlated with agent order
-    # (agents are laid out by age, which we don't want to leak into households).
-    ids = np.repeat(np.arange(n_households), sizes)
-    rng.shuffle(ids)
-    return ids.astype(np.int64)
+
+def _household_ids(age: np.ndarray, size_dist, rng: np.random.Generator,
+                   child_ages=None) -> np.ndarray:
+    """Assign each agent to a household.
+
+    If ``child_ages`` is given, households are **age-structured**: each household
+    is seeded with one adult (where adults are available) before the remaining
+    members are filled at random, so children live with adults and households mix
+    across generations. If ``child_ages`` is ``None``, members are assigned purely
+    at random (every agent still ends up in exactly one household either way).
+    """
+    n = age.size
+    sizes = _household_sizes(n, size_dist, rng)
+    n_households = sizes.size
+
+    if child_ages is None:
+        # Random assignment: expand sizes into ids and shuffle.
+        ids = np.repeat(np.arange(n_households), sizes)
+        rng.shuffle(ids)
+        return ids.astype(np.int64)
+
+    group_id = np.empty(n, dtype=np.int64)
+    adults = rng.permutation(np.where(~np.isin(age, list(child_ages)))[0])
+    children = np.where(np.isin(age, list(child_ages)))[0]
+
+    # Seed one adult into as many households as there are adults to go around.
+    n_seeded = min(n_households, adults.size)
+    group_id[adults[:n_seeded]] = np.arange(n_seeded)
+
+    # Everyone else (leftover adults + all children) fills the remaining slots.
+    pool = np.concatenate([adults[n_seeded:], children])
+    rng.shuffle(pool)
+    remaining_slots = sizes.copy()
+    remaining_slots[:n_seeded] -= 1                    # one slot already taken
+    # Repeat each household id by its remaining slot count, then hand out the pool.
+    group_id[pool] = np.repeat(np.arange(n_households), remaining_slots)
+    return group_id
 
 
 def _setting_ids(age: np.ndarray, eligible_ages, mean_size: int,

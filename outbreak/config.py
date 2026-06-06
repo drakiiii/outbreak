@@ -292,6 +292,14 @@ class Intervention:
     start_day: int = 0
     end_day: int = 0
     transmission_reduction: float = 0.0
+    # Which contact setting this targets, for the agent engine's network layers:
+    #   None        -> global (reduces all transmission, both engines)
+    #   "community" / "household" / "school" / "workplace" -> only that layer
+    # Layer-targeted interventions are honoured by the agent engine; the
+    # compartmental engine (no explicit settings) applies only global ones.
+    layer: Optional[str] = None
+
+    LAYERS = ("community", "household", "school", "workplace")
 
     def validate(self) -> "Intervention":
         if self.start_day < 0 or self.end_day < 0:
@@ -300,6 +308,8 @@ class Intervention:
             raise ValueError("intervention end_day must be after start_day")
         if not 0.0 <= self.transmission_reduction <= 1.0:
             raise ValueError("transmission_reduction must be in [0, 1]")
+        if self.layer is not None and self.layer not in self.LAYERS:
+            raise ValueError(f"intervention layer must be None or one of {self.LAYERS}")
         return self
 
     def is_active(self, day: int) -> bool:
@@ -327,14 +337,17 @@ class InterventionConfig:
             i.validate()
         return self
 
-    def multiplier(self, day: int) -> float:
-        """Combined transmission multiplier from all active interventions.
+    def multiplier(self, day: int, layer: Optional[str] = None) -> float:
+        """Combined transmission multiplier for a given contact ``layer``.
 
         Reductions combine multiplicatively (independent layers of protection).
+        An intervention applies here if it is **global** (``layer is None``) or
+        explicitly targets ``layer``. Calling with no ``layer`` (the compartmental
+        engine's case) therefore applies only the global interventions.
         """
         m = 1.0
         for i in self.interventions:
-            if i.is_active(day):
+            if i.is_active(day) and (i.layer is None or i.layer == layer):
                 m *= (1.0 - i.transmission_reduction)  # stack reductions multiplicatively
         return m
 
@@ -440,15 +453,18 @@ class NetworkConfig:
     R0 (see :mod:`outbreak.network`). Weights therefore control the *mix* of where
     transmission happens, not its overall level.
 
-    v1 simplifications (documented, not hidden): households are formed by random
-    assignment (no explicit adult+child composition), and interventions scale all
-    layers uniformly. Age-structured households and per-layer NPIs (e.g. closing
-    only schools) are natural next steps the layer structure now enables.
+    Households are age-structured by default (each household is seeded with an
+    adult so children live with adults — realistic inter-generational mixing);
+    set ``age_structured_households=False`` for purely random grouping.
+    Interventions can target individual layers (e.g. closing only schools) via the
+    ``layer`` field on :class:`Intervention`.
     """
 
     enabled: bool = False
     # Probability of household sizes 1, 2, 3, ...; entry k is P(size = k+1).
     household_size_distribution: Sequence[float] = (0.28, 0.34, 0.16, 0.14, 0.05, 0.03)
+    # Seed each household with an adult (children co-reside with adults) vs random.
+    age_structured_households: bool = True
     mean_school_size: int = 30
     mean_workplace_size: int = 20
     # Age-group indices that attend school / go to work. ``None`` => sensible

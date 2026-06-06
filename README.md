@@ -269,9 +269,12 @@ the random-mixing version — the classic "flatten the curve" effect, emerging o
 its own. (Outbreak automatically re-tunes the transmission rate so switching
 networks on doesn't change the R₀ you asked for.)
 
-This first version forms households by grouping people at random and applies any
-interventions evenly across all settings; modelling realistic family makeup and
-closing *only* schools (for example) are natural next steps.
+Households are **age-structured** — each one is seeded with an adult, so children
+live with adults (realistic across-generation mixing) rather than being grouped
+at random. And interventions can **target a single setting**: a school closure can
+reduce school contacts only, leaving home and work untouched (see the
+`layer` option on interventions). Geography/travel between regions is the next
+frontier.
 
 ### Realistic stage durations
 
@@ -488,8 +491,15 @@ community matrix into one **effective contact matrix**, and calibrates a single
 global `β` on that — so a networked run still reproduces the target R₀, and the
 within-group stochastic transmission matches it in expectation. The visible
 effect is a **lower, later peak** for the same R₀ (clustering depletes local
-susceptibles). *v1 caveats:* households are random (no explicit family makeup),
-and interventions scale all layers uniformly.
+susceptibles).
+
+Households are **age-structured** by default (each seeded with an adult, so
+children co-reside with adults), or random if
+`NetworkConfig(age_structured_households=False)`. **Interventions can target a
+single layer** via `Intervention(..., layer="school")` (or the `layer=` argument
+to the NPI helpers): the agent engine then scales only that layer's transmission,
+while the compartmental engine — having no explicit settings — applies only
+global (untargeted) interventions.
 
 ### Vaccination
 
@@ -627,11 +637,10 @@ pytest                # run the full suite of checks
 No model is reality. The main simplifications to keep in mind:
 
 - **Who-meets-whom.** The fast engine assumes people mix at random within their
-  age group. The detailed engine can do the same, or add households/schools/
-  workplaces — but in this first version households are formed by random grouping
-  (not realistic families), and interventions apply evenly everywhere. Realistic
-  family makeup, closing individual settings, and geography/travel between regions
-  are the obvious next steps.
+  age group. The detailed engine can do the same, or add households (with adults
+  and children), schools and workplaces — and can target measures at individual
+  settings. It still doesn't model **geography or travel between regions**, which
+  is the obvious next step.
 - **Superspreading is modelled in two slightly different ways** by the two engines
   (a population-wide "bumpiness" factor in the fast engine; genuine
   person-by-person variation in the detailed one).
