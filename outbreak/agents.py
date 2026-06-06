@@ -57,6 +57,7 @@ from .epidemiology import (
     transition_probability,
 )
 from .model import StepRecord
+from .network import ContactLayer, build_layers, layer_mixing_matrix
 
 # Agent states (compact integer codes). Susceptibility and vaccination are
 # separate axes: SUS + vaccinated flag == the compartmental "V" pool.
@@ -107,12 +108,17 @@ class AgentModel:
 
         params = resolve_parameters(config)
         self.p = params
-        self.beta = calibrate_beta(self.contact, params.infectious_duration, config.disease.r0)
         self.r0_realized = config.disease.r0
 
         self.t = 0
         self.cumulative_vaccinated = 0.0
         self._init_agents()
+        # Build contact layers (if enabled) and calibrate beta on the resulting
+        # effective contact structure. _build_network sets self.contact-derived
+        # self.c_eff, self.layers, self.layer_scaling and self.beta. It is called
+        # after agent/seed initialisation because constructing the network draws
+        # from rng, and we want a stable, well-defined draw order.
+        self._build_network()
 
     # ------------------------------------------------------------------ setup
     def _init_agents(self) -> None:
@@ -166,6 +172,43 @@ class AgentModel:
             # Mean-one Gamma(shape=k, scale=1/k); small k => bursty superspreading.
             self.infectivity[idx] = self.rng.gamma(shape=od, scale=1.0 / od, size=idx.size)
 
+    # --------------------------------------------------------------- network
+    def _build_network(self) -> None:
+        """Construct contact layers (if enabled) and finalise calibration.
+
+        When the network is disabled this reduces exactly to the mean-field
+        engine: no layers, a community weight of 1, and beta calibrated on the
+        plain age contact matrix.
+        """
+        net = self.config.network
+        if net.enabled:
+            # build_layers draws from rng to assign households/schools/workplaces.
+            self.layers = build_layers(net, self.age, self.rng, self.n_age)
+            self.community_weight = float(net.community_weight)
+        else:
+            self.layers = []
+            self.community_weight = 1.0
+        self._finalize_network()
+
+    def _finalize_network(self) -> None:
+        """Derive the effective contact matrix, per-group scalings and beta.
+
+        Each layer contributes an age-mixing matrix (computed from the actual
+        constructed groups); summed with the weighted community matrix this gives
+        an effective contact structure whose dominant eigenvalue we calibrate to
+        the target R0. Idempotent: also used after restoring a snapshot.
+        """
+        c_eff = self.community_weight * self.contact
+        self.layer_scaling = []
+        for layer in self.layers:
+            c_eff = c_eff + layer.weight * layer_mixing_matrix(
+                layer, self.age, self.n_age, self.N
+            )
+            # Cache the per-group divisor used by the stochastic within-group FOI.
+            self.layer_scaling.append(layer.group_scaling())
+        self.c_eff = c_eff
+        self.beta = calibrate_beta(self.c_eff, self.p.infectious_duration, self.config.disease.r0)
+
     # --------------------------------------------------------------- helpers
     def current_day(self) -> float:
         return self.t * self.dt
@@ -188,9 +231,15 @@ class AgentModel:
         return (s_by_age + (1.0 - ve) * v_by_age) / self.N_safe
 
     def effective_rt(self, day: float) -> float:
-        """Model-implied effective reproduction number at ``day``."""
+        """Model-implied effective reproduction number at ``day``.
+
+        Uses the *effective* contact matrix (community plus any network layers),
+        so the reported Rt accounts for the structured contacts. Age-level
+        susceptibility scaling is an approximation under networks (depletion is
+        partly local), but remains a good summary diagnostic.
+        """
         sus = self.susceptibility_by_age()
-        k = sus[:, None] * ngm_unit(self.contact, self.p.infectious_duration)
+        k = sus[:, None] * ngm_unit(self.c_eff, self.p.infectious_duration)
         return self.beta_effective(day) * spectral_radius(k)
 
     # ----------------------------------------------------------- transitions
@@ -250,7 +299,9 @@ class AgentModel:
         # 1. Vaccination (administrative S -> V flag) at the start of the day.
         self._vaccinate(day)
 
-        # 2. Force of infection by age from the current infectious agents.
+        # 2. Force of infection from the current infectious agents. Two channels:
+        #    (a) the age-mixed community layer, and (b) within-group transmission
+        #    in each network layer (households/schools/workplaces).
         beta_eff = self.beta_effective(day)
         # Per-agent infectious-phase weight (0 for non-infectious agents).
         weight = np.zeros(self.n_agents)
@@ -258,27 +309,34 @@ class AgentModel:
         weight[is_ip] = self.p.rel_p
         weight[is_ia] = self.p.rel_a
         weight[is_is] = 1.0
-        infectious = is_ip | is_ia | is_is        # boolean OR of the three masks
-        # Per-agent contribution = stratum factor * phase weight * individual load.
-        # np.where picks the vaccinated vs unvaccinated f_transmission per agent.
+        # Full-length per-agent contribution = stratum factor * phase weight *
+        # individual load. Zero for non-infectious agents (weight == 0), so it can
+        # be summed over everyone without masking.
         f_strat = np.where(self.vacc, self.p.f_transmission[1], self.p.f_transmission[0])
-        contrib = (weight * f_strat * self.infectivity)[infectious]
-        # Weighted bincount sums each infectious agent's contribution into its age
-        # bin -> total infectious pressure per age group, shape (n_age,).
-        pressure = np.bincount(
-            self.age[infectious], weights=contrib, minlength=self.n_age
-        )
+        contrib = weight * f_strat * self.infectivity        # (n_agents,)
+
+        # (a) Community: pressure per age -> per-age FOI -> back onto each agent.
+        pressure = np.bincount(self.age, weights=contrib, minlength=self.n_age)
         prevalence = pressure / self.N_safe
-        # Matrix-vector product mixes ages via the contact matrix -> per-age FOI.
-        foi = beta_eff * (self.contact @ prevalence)          # (n_age,)
+        foi_comm = beta_eff * self.community_weight * (self.contact @ prevalence)  # (n_age,)
+        foi_agent = foi_comm[self.age]                       # (n_agents,)
+
+        # (b) Network layers: each susceptible gains FOI from the infectious load
+        #     in its own household/class/workplace, divided by the layer scaling.
+        for layer, scaling in zip(self.layers, self.layer_scaling):
+            gid = layer.group_id
+            member = gid >= 0
+            # Total infectious contribution in each group of this layer.
+            load = np.bincount(gid[member], weights=contrib[member], minlength=scaling.size)
+            # Add each member's own-group exposure (gather load/scaling by group id).
+            gm = gid[member]
+            foi_agent[member] += beta_eff * layer.weight * load[gm] / scaling[gm]
 
         ve_sus = self.config.vaccination.ve_susceptibility
         sus = self.state == SUS
-        # Fancy-index the per-age FOI back onto every agent by its age code.
-        foi_age = foi[self.age]
         # Vaccinated agents experience a reduced FOI.
-        foi_age = np.where(self.vacc, foi_age * (1.0 - ve_sus), foi_age)
-        p_inf = transition_probability(foi_age, self.dt)
+        foi_agent = np.where(self.vacc, foi_agent * (1.0 - ve_sus), foi_agent)
+        p_inf = transition_probability(foi_agent, self.dt)
         newly = self._bernoulli(sus, p_inf)
 
         # 3. Progression transitions, drawn from start-of-step states.
@@ -393,6 +451,18 @@ class AgentModel:
             "state": self.state.tolist(),
             "vacc": self.vacc.tolist(),
             "infectivity": self.infectivity.tolist(),
+            # The network is random, so its group assignments are part of the
+            # state and must be persisted to resume an identical run.
+            "community_weight": self.community_weight,
+            "layers": [
+                {
+                    "name": layer.name,
+                    "group_id": layer.group_id.tolist(),
+                    "weight": layer.weight,
+                    "density_dependent": layer.density_dependent,
+                }
+                for layer in self.layers
+            ],
             "rng": self.rng.bit_generator.state,
         }
 
@@ -423,6 +493,25 @@ class AgentModel:
         self.state = st
         self.vacc = restore_array(state, "vacc", (n,), dtype=bool)
         self.infectivity = restore_array(state, "infectivity", (n,), dtype=float)
+
+        # Restore the contact network. Group-id arrays are untrusted like every
+        # other field: each must be length n and hold ids in [-1, n) (-1 = not a
+        # member). Then re-derive c_eff/beta/scalings from the restored layers.
+        self.community_weight = float(state.get("community_weight", 1.0))
+        restored = []
+        for ld in state.get("layers", []):
+            gid = restore_array(ld, "group_id", (n,), dtype=np.int64)
+            if gid.size and (gid.min() < -1 or gid.max() >= n):
+                raise ValueError("snapshot contains out-of-range network group ids")
+            restored.append(ContactLayer(
+                name=str(ld.get("name", "")),
+                group_id=gid,
+                weight=float(ld["weight"]),
+                density_dependent=bool(ld["density_dependent"]),
+            ))
+        self.layers = restored
+        self._finalize_network()
+
         if state.get("rng") is not None:
             self.rng.bit_generator.state = state["rng"]
 

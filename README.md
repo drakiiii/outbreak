@@ -144,6 +144,29 @@ sim.run_to_end()
   can fade out by chance). Use `n_agents` to trade fidelity for speed; very small
   seeds may stochastically go extinct — that is the model being honest, not a bug.
 
+### Contact networks (agent engine)
+
+By default the agent engine mixes within age groups (mean field). You can switch
+on explicit **households, schools and workplaces** — repeated-contact settings
+layered on top of an age-mixed community — so transmission clusters the way it
+does in reality:
+
+```python
+from outbreak.config import NetworkConfig, SimulationConfig
+
+scenario.simulation = SimulationConfig(engine="agent", n_agents=100_000)
+scenario.network = NetworkConfig(enabled=True)   # households + schools + workplaces
+```
+
+Each layer carries a relative weight; the engine derives the age-mixing matrix of
+the *actual* constructed network and calibrates one global transmission rate so
+the whole multilayer system still reproduces the target R₀. The visible effect
+of structure is a **lower, later epidemic peak** for the same R₀ (clustering
+locally depletes susceptibles). v1 forms households by random assignment and
+scales interventions across all layers uniformly; age-structured households and
+per-layer NPIs (e.g. closing only schools) are the natural next steps the layer
+structure now enables.
+
 ---
 
 ## Project layout
@@ -156,6 +179,7 @@ outbreak/
 │   ├── epidemiology.py       # shared math: NGM β-calibration, rates, ICU overflow
 │   ├── model.py              # compartmental stochastic SEIR engine + Rt
 │   ├── agents.py             # agent-based (individual-level) engine
+│   ├── network.py            # household/school/workplace contact layers (agent engine)
 │   ├── interventions.py      # named NPI builders
 │   ├── metrics.py            # Rt, attack rate, peaks, ensemble aggregation
 │   └── simulation.py         # run/pause/step/reset state machine + engine dispatch
@@ -175,6 +199,7 @@ outbreak/
 | **Vaccination** | start day, daily rate, coverage cap, age prioritisation, efficacy vs. infection / severity / transmission |
 | **Interventions** | per-window start/end and transmission reduction |
 | **Healthcare** | hospital & ICU capacity, overflow mortality multiplier |
+| **Network** (agent engine) | enable households/schools/workplaces, household size distribution, mean school/workplace size, school/work age groups, per-layer weights |
 | **Simulation** | duration, time step `dt`, deterministic/stochastic, over-dispersion, seed, **engine** (`compartmental`/`agent`), **n_agents** |
 
 Built-in disease presets: `covid_like`, `influenza_like`, `measles_like`.
@@ -195,7 +220,10 @@ The test suite (`pytest`) checks, among other things, that:
 - runs are reproducible from a seed and survive a save/load round-trip;
 - **both engines agree**: in the mean-field limit the agent-based model
   reproduces the compartmental attack rate and peak to within a few percent,
-  confirming it is a stochastic realisation of the same disease.
+  confirming it is a stochastic realisation of the same disease;
+- **contact networks preserve calibration**: with households/schools/workplaces
+  enabled, model-implied Rₜ at t=0 still equals the target R₀, and the structured
+  epidemic peaks lower and later than mean-field mixing at the same R₀.
 
 The deterministic mode converges to the **analytic SIR final-size relation**
 (`z = 1 − e^{−R₀ z}`) as the time step `dt` shrinks — e.g. for R₀ = 2.5 the
@@ -211,12 +239,14 @@ pytest                # run the full suite
 
 ## Modelling notes & limitations
 
-- **Mixing.** Both engines currently use age-structured **mean-field** mixing
-  (an age contact matrix), not explicit individual contact networks, households
-  or geography. The agent-based engine adds individual heterogeneity and
-  demographic stochasticity on top of that mixing; an explicit contact
-  **network** (households, schools, workplaces) is the natural next iteration and
-  the agent representation is built to accommodate it.
+- **Mixing.** The compartmental engine uses age-structured **mean-field** mixing
+  (an age contact matrix). The agent engine can do the same, or — with
+  `NetworkConfig(enabled=True)` — add explicit **household, school and workplace**
+  contact layers on top of an age-mixed community layer (see `outbreak/network.py`).
+  Households are currently formed by random assignment (no explicit adult+child
+  composition) and interventions scale all layers uniformly; **age-structured
+  households**, **per-layer NPIs**, and geography/metapopulation structure are the
+  natural next steps.
 - **Superspreading.** The compartmental engine models over-dispersion
   phenomenologically as a daily Gamma multiplier on the force of infection; the
   agent engine instead assigns each infected individual its own mean-one

@@ -78,6 +78,11 @@ explains what was wrong, instead of pushing ahead with nonsense.
 > Analogy: a jigsaw piece that's the wrong shape simply won't be forced into the
 > slot — you're told it doesn't fit.
 
+This applies to every part of a snapshot, including the contact-network data
+(which household/class/workplace each simulated person belongs to): those values
+are range-checked too, so a tampered file can't point a person at a group that
+doesn't exist.
+
 ### 3. Friendly errors instead of scary crashes
 
 If a file is corrupted, incomplete, or just isn't a real snapshot, the app now
