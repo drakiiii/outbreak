@@ -15,6 +15,7 @@ Quick start
 # ``from outbreak import Simulation`` instead of reaching into ``outbreak.simulation``.
 from .config import (
     DiseaseConfig,
+    EnvironmentConfig,
     HealthcareConfig,
     Intervention,
     InterventionConfig,
@@ -43,6 +44,7 @@ __all__ = [
     "InterventionConfig",
     "Intervention",
     "HealthcareConfig",
+    "EnvironmentConfig",
     "NetworkConfig",
     "SimulationConfig",
     "DISEASE_PRESETS",

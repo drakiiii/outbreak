@@ -142,14 +142,16 @@ class EpidemicModel:
         self.rel_a = p.rel_a
         self.f_transmission = p.f_transmission
         self.infectious_duration = p.infectious_duration
+        self.susceptibility = p.susceptibility      # (n_age,) relative susceptibility
 
     def _ngm_unit(self) -> np.ndarray:
-        """Next-generation matrix with beta=1 and full susceptibility."""
-        return ngm_unit(self.contact, self.infectious_duration)
+        """Next-generation matrix with beta=1 (age susceptibility folded in)."""
+        return ngm_unit(self.contact, self.infectious_duration, self.susceptibility)
 
     def _calibrate_beta(self) -> None:
         self.beta = calibrate_beta(
-            self.contact, self.infectious_duration, self.config.disease.r0
+            self.contact, self.infectious_duration, self.config.disease.r0,
+            self.susceptibility,
         )
         self.r0_realized = self.config.disease.r0  # by construction
 
@@ -240,7 +242,12 @@ class EpidemicModel:
         return self.t * self.dt
 
     def beta_effective(self, day: float) -> float:
-        return self.beta * self.config.interventions.multiplier(day)
+        # Calibrated rate, scaled by active interventions and the seasonal cycle.
+        return (
+            self.beta
+            * self.config.interventions.multiplier(day)
+            * self.config.environment.seasonal_multiplier(day)
+        )
 
     def susceptibility_by_age(self) -> np.ndarray:
         """Effective susceptible fraction per age (S plus leaky-protected V)."""
@@ -311,8 +318,12 @@ class EpidemicModel:
         ).sum(axis=0)                                    # (n_age,)
         prevalence = infectious_pressure / self.N_safe
         # contact @ prevalence is a matrix-vector product mixing age groups via
-        # the contact matrix, giving the per-age force of infection (n_age,).
-        foi = beta_eff * noise * (self.contact @ prevalence)   # (n_age,)
+        # the contact matrix, giving the per-age internal force of infection.
+        internal = beta_eff * noise * (self.contact @ prevalence)   # (n_age,)
+        # Add the external/spillover hazard (importations / reservoir), then scale
+        # the whole hazard by each age's relative susceptibility.
+        external = self.config.environment.external_force(day)      # scalar
+        foi = self.susceptibility * (internal + external)           # (n_age,)
 
         ve_sus = self.config.vaccination.ve_susceptibility
         # Per-step infection probabilities (per-age, shape (n_age,)); vaccinated S

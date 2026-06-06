@@ -30,6 +30,7 @@ import streamlit as st
 
 from outbreak.config import (
     DiseaseConfig,
+    EnvironmentConfig,
     HealthcareConfig,
     Intervention,
     InterventionConfig,
@@ -151,6 +152,25 @@ def build_scenario() -> ScenarioConfig:
         npi_reduction = st.slider("Transmission reduction", 0.0, 0.95, 0.5, 0.05,
                                   disabled=not npi_enabled)
 
+    with st.sidebar.expander("Environment (seasonality & spillover)"):
+        season_on = st.checkbox("Seasonal transmission", value=False)
+        season_amp = st.slider("Seasonal swing (amplitude)", 0.0, 0.9, 0.3, 0.05,
+                               disabled=not season_on,
+                               help="Fraction by which transmissibility swings up/down "
+                                    "over the year. R₀ is the annual average.")
+        season_peak = st.number_input("Peak transmissibility day", 0, 365, 0, 5,
+                                      disabled=not season_on)
+        spillover_on = st.checkbox("External / spillover infections", value=False,
+                                   help="A background infection hazard from outside the "
+                                        "population (imports, or an animal reservoir). Can "
+                                        "start or sustain outbreaks on its own.")
+        # Slider is in cases per 100,000 susceptibles per day; convert to a rate.
+        spillover_per_100k = st.slider("Spillover rate (per 100k/day)", 0.0, 50.0, 5.0, 0.5,
+                                       disabled=not spillover_on)
+        child_susc = st.slider("Children's relative susceptibility (0-17)", 0.1, 1.5, 1.0, 0.05,
+                               help="How susceptible the youngest age group is to infection, "
+                                    "relative to adults (1.0 = same).")
+
     with st.sidebar.expander("Healthcare capacity"):
         cap_enabled = st.checkbox("Limit ICU capacity", value=False)
         icu_capacity = st.number_input("ICU beds", 0, 1_000_000, 500, 50,
@@ -228,6 +248,8 @@ def build_scenario() -> ScenarioConfig:
             hospitalization_rate=hosp, icu_rate=icu, death_rate=death,
             waning_immunity_days=(waning_days if waning_on else None),
             duration_dispersion=duration_dispersion,
+            # Youngest band gets the chosen relative susceptibility; others = 1.0.
+            susceptibility=([child_susc] + [1.0] * 3 if child_susc != 1.0 else 1.0),
         ),
         vaccination=VaccinationConfig(
             enabled=vacc_enabled, start_day=int(vacc_start), daily_rate=vacc_rate,
@@ -237,6 +259,12 @@ def build_scenario() -> ScenarioConfig:
         healthcare=HealthcareConfig(
             icu_capacity=(int(icu_capacity) if cap_enabled else None),
             overflow_mortality_multiplier=overflow_mult,
+        ),
+        environment=EnvironmentConfig(
+            seasonal_amplitude=(season_amp if season_on else 0.0),
+            seasonal_peak_day=int(season_peak),
+            # cases per 100k/day -> per-susceptible daily hazard.
+            external_infection_rate=(spillover_per_100k / 100_000.0 if spillover_on else 0.0),
         ),
         network=NetworkConfig(
             enabled=bool(net_enabled), household_weight=hh_w, school_weight=sch_w,

@@ -325,10 +325,11 @@ outbreak/
 | Group | What it controls (in plain terms) |
 |-------|-----------------------------------|
 | **Population** | How many people, their age mix, how many are infected at the start, and how many are already immune. |
-| **Disease** | How contagious it is (R₀); how long each phase lasts (and how tightly those durations cluster around their average); how infectious people are before/without symptoms; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
+| **Disease** | How contagious it is (R₀); how long each phase lasts (and how tightly those durations cluster around their average); how infectious people are before/without symptoms; how susceptible each age is to infection; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
 | **Vaccination** | When the rollout starts, how fast, the coverage limit, whether the elderly go first, and how well the vaccine blocks infection / severe illness / onward spread. |
 | **Interventions** | When measures (e.g. a lockdown) start and end, and how much they cut transmission. |
 | **Healthcare** | Number of hospital and ICU beds, and how much the death rate rises when they overflow. |
+| **Environment** | Seasonal swing in transmissibility (amplitude, period, peak day) and an external/spillover infection rate (importations or an animal reservoir). |
 | **Network** (detailed engine) | Whether to switch on households/schools/workplaces, their typical sizes, which ages attend school or work, and how much spread happens in each setting. |
 | **Simulation** | How many days to run, the random seed (for repeatable runs), whether to include randomness, and which engine to use. |
 
@@ -428,13 +429,18 @@ Mean stage durations are set by `latent_period`, `presymptomatic_period`,
   POLYMOD-style matrix; it is made *reciprocal* for the population
   (`C[i,j]·Nᵢ = C[j,i]·Nⱼ`) so total contacts are consistent.
 - The per-age **force of infection** (instantaneous infection hazard) is
-  `λᵢ = β_eff · Σⱼ C[i,j] · (weighted infectious prevalence in j)`, where
-  infectious people contribute with phase weights — pre-symptomatic
+  `λᵢ = sᵢ · ( β_eff · Σⱼ C[i,j] · (weighted infectious prevalence in j) + ε )`,
+  where infectious people contribute with phase weights — pre-symptomatic
   `rel_infectiousness_presymptomatic`, asymptomatic
   `rel_infectiousness_asymptomatic`, symptomatic `1.0`.
+- `sᵢ` is the **age-specific relative susceptibility** (`susceptibility`,
+  default 1): a less-susceptible age acquires proportionally fewer infections
+  (children are often less susceptible to infection, not just less severe). It is
+  folded into the R₀ calibration so the target R₀ is still hit.
+- `ε` is an optional **external/spillover hazard** — see the environment section.
 - The per-step probability a susceptible is infected is `1 − exp(−λ·dt)`.
 - `β_eff` is the calibrated per-contact transmission rate times any active
-  intervention multiplier (see below).
+  intervention multiplier **and the seasonal multiplier** (see below).
 
 ### Setting the contagiousness: R₀ calibration and Rₜ
 
@@ -517,6 +523,25 @@ current version interventions scale all contact settings uniformly.)
 - `hospital_capacity` can be set but currently only ICU overflow affects
   mortality; it does not yet change dynamics.
 
+### Transmission environment: seasonality and external spillover
+
+Two optional, off-by-default effects (in `EnvironmentConfig`) shared by both
+engines:
+
+- **Seasonality.** Transmissibility is multiplied by
+  `1 + seasonal_amplitude · cos(2π·(day − seasonal_peak_day) / seasonal_period_days)`,
+  so the effective reproduction number swings above and below its calibrated
+  value through the year — the recurring winter/summer pattern of real
+  respiratory diseases. Because the cosine averages to zero over a period, the
+  **target R₀ is the annual average** and calibration is unchanged.
+- **External / spillover force of infection.** A constant background hazard
+  `external_infection_rate` (per susceptible per day, also modulated by season)
+  of being infected from *outside* the modelled population — importations from
+  elsewhere, or a zoonotic/environmental reservoir (e.g. rodent-borne spillover).
+  This lets outbreaks **start with no initial cases**, **re-ignite after
+  fade-out**, or **persist even when person-to-person spread alone (R₀ < 1) would
+  die out** — the missing ingredient for reservoir-driven diseases.
+
 ### Waning immunity and reinfection
 
 If `waning_immunity_days` is set, recovered people return to susceptible at rate
@@ -579,7 +604,11 @@ among other things, that:
   R₀ you asked for, and produces the lower, later "flatten the curve" peak;
 - **realistic stage durations preserve R₀ and final size** — making per-stage
   durations peaked rather than exponential leaves the R₀ and eventual attack rate
-  unchanged, while sharpening the epidemic peak.
+  unchanged, while sharpening the epidemic peak;
+- **the transmission-environment features behave** — age-specific susceptibility
+  still hits the target R₀ while sparing less-susceptible ages; seasonality swings
+  transmissibility on a yearly cosine; and an external/spillover force starts an
+  outbreak from zero initial cases and sustains a sub-critical (R₀ < 1) disease.
 
 As a maths check, the smooth (luck-free) mode lands on the textbook answer for
 the final size of an epidemic. For example, for R₀ = 2.5 the textbook says 89.3%

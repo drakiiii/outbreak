@@ -178,9 +178,18 @@ class DiseaseConfig:
     # exponential sojourns intrinsically and ignores this.
     duration_dispersion: float = 1.0
 
+    # Relative susceptibility to infection, per age (scalar or per-age sequence).
+    # 1.0 = baseline; e.g. children are often less susceptible to infection (not
+    # just less severe), which a value < 1 for the youngest band captures. Folded
+    # into the R0 calibration so the target R0 is still reproduced.
+    susceptibility: PerAge = 1.0
+
     def validate(self, n_age: int) -> "DiseaseConfig":
         _check_positive(self.r0, "r0")
         _check_positive(self.duration_dispersion, "duration_dispersion")
+        # Relative susceptibility must be non-negative (it may exceed 1).
+        if np.any(_as_array(self.susceptibility, n_age, "susceptibility") < 0):
+            raise ValueError("susceptibility must be >= 0")
         # Loop over field names and validate each via getattr, avoiding a wall of
         # near-identical checks. Returns self so callers can chain .validate().
         for fld in (
@@ -225,6 +234,9 @@ class DiseaseConfig:
 
     def death_rate_arr(self, n_age: int) -> np.ndarray:
         return _as_array(self.death_rate, n_age, "death_rate")
+
+    def susceptibility_arr(self, n_age: int) -> np.ndarray:
+        return _as_array(self.susceptibility, n_age, "susceptibility")
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +363,60 @@ class HealthcareConfig:
         if self.overflow_mortality_multiplier < 1.0:
             raise ValueError("overflow_mortality_multiplier must be >= 1")
         return self
+
+
+# ---------------------------------------------------------------------------
+# Transmission environment: seasonality and external/spillover infection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EnvironmentConfig:
+    """The time-varying transmission environment, shared by both engines.
+
+    Two independent, off-by-default effects:
+
+    * **Seasonality.** Transmissibility is modulated by a yearly cosine, so the
+      effective reproduction number swings above/below its calibrated value as
+      the seasons change. The target R0 is interpreted as the *annual average*
+      (the cosine averages to zero over a period), so calibration is unchanged.
+
+    * **External / spillover force of infection.** A constant background hazard of
+      infection that does **not** depend on the internal epidemic — importations
+      from elsewhere, or a zoonotic/environmental reservoir (e.g. rodent-borne
+      spillover). This lets outbreaks start, re-ignite after fade-out, or persist
+      even when person-to-person spread alone (R0) is sub-critical.
+    """
+
+    # Seasonality: beta is multiplied by 1 + amplitude*cos(2π(day - peak)/period).
+    seasonal_amplitude: float = 0.0        # 0 = none; must be in [0, 1)
+    seasonal_period_days: float = 365.0
+    seasonal_peak_day: float = 0.0         # day of peak transmissibility
+
+    # External force of infection: daily per-susceptible hazard from outside the
+    # modelled population. 0 = none. Modulated by the same seasonal factor.
+    external_infection_rate: float = 0.0
+
+    def validate(self) -> "EnvironmentConfig":
+        if not 0.0 <= self.seasonal_amplitude < 1.0:
+            raise ValueError("seasonal_amplitude must be in [0, 1)")
+        if self.seasonal_period_days <= 0:
+            raise ValueError("seasonal_period_days must be > 0")
+        if self.external_infection_rate < 0:
+            raise ValueError("external_infection_rate must be >= 0")
+        return self
+
+    def seasonal_multiplier(self, day: float) -> float:
+        """Transmissibility multiplier at ``day`` (mean 1 over a full period)."""
+        if self.seasonal_amplitude == 0.0:
+            return 1.0
+        phase = 2.0 * np.pi * (day - self.seasonal_peak_day) / self.seasonal_period_days
+        return 1.0 + self.seasonal_amplitude * np.cos(phase)
+
+    def external_force(self, day: float) -> float:
+        """External per-susceptible infection hazard at ``day`` (seasonally scaled)."""
+        if self.external_infection_rate == 0.0:
+            return 0.0
+        return self.external_infection_rate * self.seasonal_multiplier(day)
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +566,7 @@ class ScenarioConfig:
     vaccination: VaccinationConfig = field(default_factory=VaccinationConfig)
     interventions: InterventionConfig = field(default_factory=InterventionConfig)
     healthcare: HealthcareConfig = field(default_factory=HealthcareConfig)
+    environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     # Optional explicit contact matrix (n_age x n_age). If None, a default is
@@ -512,6 +579,7 @@ class ScenarioConfig:
         self.vaccination.validate()
         self.interventions.validate()
         self.healthcare.validate()
+        self.environment.validate()
         self.network.validate(n_age)
         self.simulation.validate()
         if self.contact_matrix is not None:
@@ -547,6 +615,7 @@ class ScenarioConfig:
                 interventions=interventions.get("interventions", [])
             ),
             healthcare=HealthcareConfig(**d.get("healthcare", {})),
+            environment=EnvironmentConfig(**d.get("environment", {})),
             network=NetworkConfig(**d.get("network", {})),
             simulation=SimulationConfig(**d.get("simulation", {})),
             contact_matrix=d.get("contact_matrix"),

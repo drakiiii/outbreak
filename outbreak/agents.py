@@ -110,6 +110,7 @@ class AgentModel:
         self.p = params
         # Shape of the per-stage sojourn-time distribution (k=1 => exponential).
         self.duration_shape = float(params.duration_dispersion)
+        self.susceptibility = params.susceptibility    # (n_age,) relative susceptibility
         self.r0_realized = config.disease.r0
 
         self.t = 0
@@ -230,14 +231,22 @@ class AgentModel:
             # Cache the per-group divisor used by the stochastic within-group FOI.
             self.layer_scaling.append(layer.group_scaling())
         self.c_eff = c_eff
-        self.beta = calibrate_beta(self.c_eff, self.p.infectious_duration, self.config.disease.r0)
+        self.beta = calibrate_beta(
+            self.c_eff, self.p.infectious_duration, self.config.disease.r0,
+            self.susceptibility,
+        )
 
     # --------------------------------------------------------------- helpers
     def current_day(self) -> float:
         return self.t * self.dt
 
     def beta_effective(self, day: float) -> float:
-        return self.beta * self.config.interventions.multiplier(day)
+        # Calibrated rate, scaled by active interventions and the seasonal cycle.
+        return (
+            self.beta
+            * self.config.interventions.multiplier(day)
+            * self.config.environment.seasonal_multiplier(day)
+        )
 
     def _counts_by_age(self, mask: np.ndarray) -> np.ndarray:
         """Number of agents in each age group among those selected by ``mask``."""
@@ -262,7 +271,7 @@ class AgentModel:
         partly local), but remains a good summary diagnostic.
         """
         sus = self.susceptibility_by_age()
-        k = sus[:, None] * ngm_unit(self.c_eff, self.p.infectious_duration)
+        k = sus[:, None] * ngm_unit(self.c_eff, self.p.infectious_duration, self.susceptibility)
         return self.beta_effective(day) * spectral_radius(k)
 
     # ----------------------------------------------------------- transitions
@@ -354,6 +363,11 @@ class AgentModel:
             # Add each member's own-group exposure (gather load/scaling by group id).
             gm = gid[member]
             foi_agent[member] += beta_eff * layer.weight * load[gm] / scaling[gm]
+
+        # (c) External/spillover hazard (importations / reservoir), then scale the
+        #     whole per-agent hazard by each agent's age-specific susceptibility.
+        external = self.config.environment.external_force(day)
+        foi_agent = self.susceptibility[self.age] * (foi_agent + external)
 
         ve_sus = self.config.vaccination.ve_susceptibility
         sus = self.state == SUS

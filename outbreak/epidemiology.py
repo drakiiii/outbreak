@@ -55,6 +55,10 @@ class ResolvedParams:
     # the compartmental engine uses exponential sojourns and ignores it.
     duration_dispersion: float = 1.0
 
+    # Relative susceptibility to infection by age (1.0 = baseline). Scales each
+    # susceptible's force of infection and is folded into the R0 calibration.
+    susceptibility: np.ndarray = None      # (n_age,)
+
 
 def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
     """Resolve a scenario's disease block into arrays the engines consume."""
@@ -116,6 +120,7 @@ def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
         f_transmission=f_transmission,
         infectious_duration=infectious_duration,
         duration_dispersion=d.duration_dispersion,
+        susceptibility=d.susceptibility_arr(n),
     )
 
 
@@ -127,17 +132,24 @@ def transition_probability(rate, dt: float):
     return 1.0 - np.exp(-np.asarray(rate, dtype=float) * dt)
 
 
-def ngm_unit(contact: np.ndarray, infectious_duration: np.ndarray) -> np.ndarray:
+def ngm_unit(contact: np.ndarray, infectious_duration: np.ndarray,
+             susceptibility: np.ndarray = None) -> np.ndarray:
     """Next-generation matrix with ``beta = 1`` and full susceptibility.
 
     ``K0[i, j]`` is the number of secondary infections in group ``i`` produced by
     one infected individual in group ``j``: contacts a ``j``-individual has with
-    ``i`` (``C[j, i]``) times ``j``'s expected infectious duration.
+    ``i`` (``C[j, i]``) times ``j``'s expected infectious duration. If a per-age
+    ``susceptibility`` is given, each row ``i`` is scaled by it (a less
+    susceptible age acquires proportionally fewer infections).
     """
     # contact.T puts C[j, i] at position [i, j]. infectious_duration[None, :] is
     # a (1, n_age) row vector that broadcasts across rows, scaling each *column* j
     # by group j's infectious duration -> K0[i, j] = C[j, i] * duration[j].
-    return contact.T * infectious_duration[None, :]
+    k0 = contact.T * infectious_duration[None, :]
+    if susceptibility is not None:
+        # Scale each row i (the acquiring age group) by its susceptibility.
+        k0 = susceptibility[:, None] * k0
+    return k0
 
 
 def spectral_radius(matrix: np.ndarray) -> float:
@@ -150,13 +162,14 @@ def spectral_radius(matrix: np.ndarray) -> float:
     return float(np.max(np.abs(eigenvalues)))
 
 
-def calibrate_beta(contact: np.ndarray, infectious_duration: np.ndarray, r0: float) -> float:
+def calibrate_beta(contact: np.ndarray, infectious_duration: np.ndarray, r0: float,
+                   susceptibility: np.ndarray = None) -> float:
     """Per-contact transmission rate giving the target ``r0``.
 
-    Calibrated so the dominant eigenvalue of the next-generation matrix equals
-    ``r0``.
+    Calibrated so the dominant eigenvalue of the next-generation matrix (with any
+    age-specific ``susceptibility`` folded in) equals ``r0``.
     """
-    rho = spectral_radius(ngm_unit(contact, infectious_duration))
+    rho = spectral_radius(ngm_unit(contact, infectious_duration, susceptibility))
     if rho <= 0:
         raise ValueError("degenerate contact structure: cannot calibrate beta")
     return r0 / rho
