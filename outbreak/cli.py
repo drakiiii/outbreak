@@ -84,6 +84,9 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--quiet", action="store_true",
                      help="Don't print the summary to the screen.")
 
+    p.add_argument("--fit", metavar="CASES.csv",
+                   help="Fit R0 (and an observation scale) to a CSV of observed "
+                        "daily cases, then print the result, instead of simulating.")
     p.add_argument("--list-presets", action="store_true",
                    help="List the built-in disease presets and exit.")
     return p
@@ -164,6 +167,54 @@ def _write_timeseries_csv(cols: dict, path: str) -> None:
         writer = csv.writer(fh)
         writer.writerow(cols.keys())                 # header row
         writer.writerows(zip(*cols.values()))        # transpose dict-of-lists into rows
+
+
+def _read_case_series(path: str) -> "list":
+    """Read a daily-case column from a CSV (header optional).
+
+    Prefers a column named cases/observed/reported_cases/new_symptomatic; with no
+    header, uses the single column (or the last one).
+    """
+    preferred = ("reported_cases", "cases", "observed", "new_symptomatic", "y")
+    with open(path, "r", encoding="utf-8") as fh:
+        rows = [r for r in csv.reader(fh) if r]
+    if not rows:
+        raise ValueError("case file is empty")
+
+    def _is_number(s):
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+
+    header = rows[0]
+    has_header = not all(_is_number(c) for c in header)
+    col = len(header) - 1                                  # default: last column
+    if has_header:
+        lower = [h.strip().lower() for h in header]
+        col = next((lower.index(name) for name in preferred if name in lower), col)
+        rows = rows[1:]
+    elif len(header) == 1:
+        col = 0
+    return [float(r[col]) for r in rows]
+
+
+def _run_fit(scenario: ScenarioConfig, args: argparse.Namespace) -> int:
+    from .calibrate import fit_to_incidence
+    observed = _read_case_series(args.fit)
+    fit = fit_to_incidence(observed, scenario)
+    if not args.quiet:
+        print(f"\n=== Fit to {len(observed)} days of observed cases "
+              f"({scenario.disease.name}) ===")
+        print(f"  {fit.summary()}")
+    if args.json_path:
+        with open(args.json_path, "w", encoding="utf-8") as fh:
+            json.dump({"r0": fit.r0, "scale": fit.scale, "loss": fit.loss,
+                       "success": fit.success}, fh, indent=2)
+        if not args.quiet:
+            print(f"Wrote fit result to {args.json_path}")
+    return 0
 
 
 def _run_single(scenario: ScenarioConfig, args: argparse.Namespace) -> int:
@@ -251,6 +302,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"error: could not build scenario: {exc}", file=sys.stderr)
         return 2
 
+    if args.fit is not None:
+        try:
+            return _run_fit(scenario, args)
+        except FileNotFoundError:
+            print(f"error: case file not found: {args.fit}", file=sys.stderr)
+            return 2
+        except (ValueError, IndexError) as exc:
+            print(f"error: could not fit to {args.fit}: {exc}", file=sys.stderr)
+            return 2
     if args.ensemble is not None:
         return _run_ensemble(scenario, args)
     return _run_single(scenario, args)

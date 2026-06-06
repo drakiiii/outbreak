@@ -29,6 +29,7 @@ from .config import (
     preset_scenario,
 )
 from .agents import AgentModel
+from .calibrate import FitResult, fit_to_incidence
 from .metrics import (
     EpidemicSummary,
     aggregate_ensemble,
@@ -69,5 +70,7 @@ __all__ = [
     "aggregate_ensemble",
     "history_to_columns",
     "reported_incidence",
+    "fit_to_incidence",
+    "FitResult",
     "__version__",
 ]

@@ -174,6 +174,8 @@ Useful options (see `python -m outbreak --help` for the full list):
 | `--population`, `--initial-infected`, `--r0`, `--days` | Override the basics. |
 | `--engine {compartmental,agent}`, `--n-agents`, `--network` | Choose and configure the engine. |
 | `--ensemble N` | Run N random repeats; report median + range. |
+| `--ascertainment`, `--reporting-delay` | Surveillance realism: fraction of cases reported, and the reporting lag. |
+| `--fit CASES.csv` | Fit R₀ + an observation scale to an observed daily-case CSV. |
 | `--csv FILE`, `--json FILE`, `--quiet` | Save results / suppress the printout. |
 | `--seed N`, `--no-stochastic` | Make runs repeatable, or run the smooth (luck-free) version. |
 
@@ -298,6 +300,33 @@ matters for hospital surges and the timing of interventions.
 (The fast compartmental engine uses exponential durations intrinsically; this
 realism is an agent-engine feature.)
 
+### Fitting to real data
+
+Outbreak can be **matched to a real outbreak**, not just used for "what if?"
+exploration. Given a series of observed daily cases, it finds the R₀ (and an
+observation/under-reporting scale) that best reproduces the data:
+
+```python
+from outbreak import fit_to_incidence, preset_scenario
+
+observed = [ ... ]   # daily case counts, aligned to day 0
+fit = fit_to_incidence(observed, preset_scenario("covid_like", total_population=1_000_000))
+print(fit.summary())          # e.g. "fitted R0 = 2.30, observation scale = 0.25 ..."
+sim_ready = fit.scenario      # a scenario with the fitted R0, ready to run forward
+```
+
+Or from the command line on a CSV of cases:
+
+```bash
+python -m outbreak --preset covid_like --population 1000000 --fit cases.csv
+```
+
+It uses the fast deterministic engine and a Poisson likelihood, profiling out the
+reporting scale so only a robust one-dimensional search over R₀ remains. Other
+parameters (durations, severity, age structure) are taken from the base scenario
+— set those to your best estimates first. The series is assumed to start at model
+day 0.
+
 ---
 
 ## Project layout
@@ -313,6 +342,7 @@ outbreak/
 │   ├── network.py            # households / schools / workplaces for the detailed engine
 │   ├── interventions.py      # ready-made measures (mask mandate, lockdown, ...)
 │   ├── metrics.py            # turns a run into headline numbers (attack rate, peaks, ...)
+│   ├── calibrate.py          # fit R₀ + reporting scale to observed case data
 │   ├── simulation.py         # the play/pause/step/save controller
 │   ├── cli.py                # the command-line interface (`outbreak …`)
 │   └── __main__.py           # lets `python -m outbreak …` work

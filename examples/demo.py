@@ -12,7 +12,7 @@ agent-based) to show they agree.
 
 import numpy as np
 
-from outbreak import Simulation, preset_scenario, run_ensemble
+from outbreak import Simulation, fit_to_incidence, preset_scenario, run_ensemble
 from outbreak.config import (
     DiseaseConfig,
     EnvironmentConfig,
@@ -159,6 +159,20 @@ def main():
         s = Simulation(scenario.validate()); s.run_to_end(); summ = s.summary()
         tag = "no spillover" if rate == 0 else f"spillover {rate:.0e}/day"
         print(f"  {tag:<18} (0 initial cases): total infections {summ.total_infections:,.0f}")
+
+    # 8. Calibration to data: recover an unknown R0 (and reporting fraction) from
+    #    a noisy, under-reported case curve.
+    print("\n=== Calibration to observed data ===")
+    truth_r0, truth_scale = 2.4, 0.3
+    sc = preset_scenario("covid_like", total_population=population)
+    sc.disease.r0 = truth_r0
+    sc.simulation = SimulationConfig(stochastic=False, overdispersion=None, duration_days=160)
+    sim = Simulation(sc.validate()); sim.run_to_end()
+    sym = np.array(sim.to_columns()["new_symptomatic"])
+    observed = np.random.default_rng(0).poisson(truth_scale * sym)   # noisy, under-reported
+    fit = fit_to_incidence(observed, preset_scenario("covid_like", total_population=population))
+    print(f"  truth : R0 = {truth_r0}, reporting scale = {truth_scale}")
+    print(f"  {fit.summary()}")
 
 
 if __name__ == "__main__":
