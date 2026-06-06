@@ -33,6 +33,7 @@ from outbreak.config import (
     HealthcareConfig,
     Intervention,
     InterventionConfig,
+    NetworkConfig,
     PopulationConfig,
     ScenarioConfig,
     SimulationConfig,
@@ -184,6 +185,20 @@ def build_scenario() -> ScenarioConfig:
                                    disabled=not stochastic)
         seed = st.number_input("Random seed", 0, 1_000_000, 42, 1, disabled=not stochastic)
 
+    # Contact network (agent engine only). Households/schools/workplaces add
+    # repeated-contact structure on top of community mixing; the relative weights
+    # control where transmission happens (the engine recalibrates beta to R0).
+    with st.sidebar.expander("Contact network (agent engine)"):
+        net_available = engine == "agent"
+        if not net_available:
+            st.caption("Switch to the agent engine to enable contact networks.")
+        net_enabled = st.checkbox("Enable households / schools / workplaces",
+                                  value=False, disabled=not net_available)
+        hh_w = st.slider("Household weight", 0.0, 3.0, 1.0, 0.1, disabled=not net_enabled)
+        sch_w = st.slider("School weight", 0.0, 3.0, 0.6, 0.1, disabled=not net_enabled)
+        wrk_w = st.slider("Workplace weight", 0.0, 3.0, 0.6, 0.1, disabled=not net_enabled)
+        com_w = st.slider("Community weight", 0.0, 3.0, 0.5, 0.1, disabled=not net_enabled)
+
     # Only add an intervention if it's enabled and the window is non-empty.
     interventions = []
     if npi_enabled and npi_end > npi_start:
@@ -214,6 +229,10 @@ def build_scenario() -> ScenarioConfig:
         healthcare=HealthcareConfig(
             icu_capacity=(int(icu_capacity) if cap_enabled else None),
             overflow_mortality_multiplier=overflow_mult,
+        ),
+        network=NetworkConfig(
+            enabled=bool(net_enabled), household_weight=hh_w, school_weight=sch_w,
+            workplace_weight=wrk_w, community_weight=com_w,
         ),
         simulation=SimulationConfig(
             duration_days=int(duration), stochastic=stochastic,
@@ -369,6 +388,8 @@ def main():
 
         if sim.config.simulation.engine == "agent":
             engine_tag = f"agent-based · {sim.model.n_agents:,} agents (×{sim.model.scale:.0f})"
+            if sim.config.network.enabled:
+                engine_tag += " · networked"
         else:
             engine_tag = "compartmental"
         st.progress(sim.progress, text=f"Day {sim.current_day:.0f} / "

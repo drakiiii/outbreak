@@ -13,7 +13,7 @@ agent-based) to show they agree.
 import numpy as np
 
 from outbreak import Simulation, preset_scenario, run_ensemble
-from outbreak.config import InterventionConfig, SimulationConfig, VaccinationConfig
+from outbreak.config import InterventionConfig, NetworkConfig, SimulationConfig, VaccinationConfig
 from outbreak.interventions import lockdown
 from outbreak.metrics import summarize
 
@@ -92,6 +92,28 @@ def main():
         # {engine:<14} left-pads the engine name to 14 chars for column alignment.
         print(f"  {engine:<14}: attack rate {100 * attack:5.1f}%   "
               f"mean peak infectious {peak:,.0f}")
+
+    # 5. Contact networks (agent engine): households/schools/workplaces cluster
+    #    transmission. For the same R0 this flattens the peak versus mean-field
+    #    mixing, even though both are calibrated to the same target R0.
+    print("\n=== Agent engine: mean-field vs contact network (8-run mean) ===")
+    for enabled in (False, True):
+        scenario = preset_scenario("covid_like", total_population=population)
+        scenario.population.initial_infected = 500
+        scenario.disease.r0 = 1.8
+        scenario.disease.waning_immunity_days = None
+        scenario.network = NetworkConfig(enabled=enabled)
+        scenario.simulation = SimulationConfig(
+            duration_days=400, engine="agent", n_agents=100_000, overdispersion=None,
+        )
+        histories = run_ensemble(scenario.validate(), n_runs=8, base_seed=0)
+        attack = np.mean([summarize(h, scenario.disease.r0).attack_rate for h in histories])
+        peak = np.mean([summarize(h, scenario.disease.r0).peak_infectious for h in histories])
+        peak_day = np.mean([summarize(h, scenario.disease.r0).peak_infectious_day
+                            for h in histories])
+        label = "contact network" if enabled else "mean-field"
+        print(f"  {label:<16}: attack rate {100 * attack:5.1f}%   "
+              f"peak {peak:,.0f} on day {peak_day:.0f}")
 
 
 if __name__ == "__main__":

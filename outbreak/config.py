@@ -344,6 +344,85 @@ class HealthcareConfig:
 
 
 # ---------------------------------------------------------------------------
+# Contact network (agent engine only)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NetworkConfig:
+    """Structured contact layers for the *agent* engine.
+
+    By default the agent engine mixes within age groups (mean field). Enabling a
+    network adds explicit, repeated-contact settings — **households**, **schools**
+    and **workplaces** — on top of an age-mixed **community** layer. People mostly
+    re-encounter the same household/class/colleagues each day, which clusters
+    transmission and lets local saturation (e.g. a household burning through its
+    susceptibles) emerge, rather than every contact being with a fresh random
+    person. The compartmental engine ignores this block.
+
+    Each layer carries a dimensionless *weight*; the engine derives one global
+    transmission rate so the whole multilayer network still reproduces the target
+    R0 (see :mod:`outbreak.network`). Weights therefore control the *mix* of where
+    transmission happens, not its overall level.
+
+    v1 simplifications (documented, not hidden): households are formed by random
+    assignment (no explicit adult+child composition), and interventions scale all
+    layers uniformly. Age-structured households and per-layer NPIs (e.g. closing
+    only schools) are natural next steps the layer structure now enables.
+    """
+
+    enabled: bool = False
+    # Probability of household sizes 1, 2, 3, ...; entry k is P(size = k+1).
+    household_size_distribution: Sequence[float] = (0.28, 0.34, 0.16, 0.14, 0.05, 0.03)
+    mean_school_size: int = 30
+    mean_workplace_size: int = 20
+    # Age-group indices that attend school / go to work. ``None`` => sensible
+    # defaults derived from the number of age groups (youngest attends school;
+    # the working-age middle bands work; the oldest band does neither).
+    school_age_groups: Optional[Sequence[int]] = None
+    work_age_groups: Optional[Sequence[int]] = None
+    # Relative transmission weights per layer (dimensionless; the global beta
+    # scales them all). Defaults give a household-dominant, community-moderate mix.
+    household_weight: float = 1.0
+    school_weight: float = 0.6
+    workplace_weight: float = 0.6
+    community_weight: float = 0.5
+
+    def validate(self, n_age: int) -> "NetworkConfig":
+        dist = np.asarray(self.household_size_distribution, dtype=float)
+        if dist.size == 0 or np.any(dist < 0) or dist.sum() <= 0:
+            raise ValueError("household_size_distribution must be non-negative and sum to > 0")
+        if self.mean_school_size <= 0 or self.mean_workplace_size <= 0:
+            raise ValueError("mean_school_size and mean_workplace_size must be > 0")
+        for fld in ("household_weight", "school_weight", "workplace_weight", "community_weight"):
+            if getattr(self, fld) < 0:
+                raise ValueError(f"{fld!r} must be >= 0")
+        # An all-zero weight set would leave no transmission to calibrate.
+        if self.enabled and (
+            self.household_weight + self.school_weight
+            + self.workplace_weight + self.community_weight
+        ) <= 0:
+            raise ValueError("at least one layer weight must be > 0 when network is enabled")
+        for grp in (self.resolved_school_groups(n_age), self.resolved_work_groups(n_age)):
+            if any(g < 0 or g >= n_age for g in grp):
+                raise ValueError("school/work age-group indices must be in range")
+        return self
+
+    def resolved_school_groups(self, n_age: int) -> list:
+        """Age-group indices attending school (explicit, or a derived default)."""
+        if self.school_age_groups is not None:
+            return list(self.school_age_groups)
+        return [0]  # youngest band
+
+    def resolved_work_groups(self, n_age: int) -> list:
+        """Age-group indices in workplaces (explicit, or a derived default)."""
+        if self.work_age_groups is not None:
+            return list(self.work_age_groups)
+        # Everyone between the youngest (school) and the oldest (retired) band.
+        work = [i for i in range(1, n_age - 1)]
+        return work if work else [min(1, n_age - 1)]
+
+
+# ---------------------------------------------------------------------------
 # Simulation controls
 # ---------------------------------------------------------------------------
 
@@ -411,6 +490,7 @@ class ScenarioConfig:
     vaccination: VaccinationConfig = field(default_factory=VaccinationConfig)
     interventions: InterventionConfig = field(default_factory=InterventionConfig)
     healthcare: HealthcareConfig = field(default_factory=HealthcareConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     # Optional explicit contact matrix (n_age x n_age). If None, a default is
     # derived from the number of age groups (see outbreak.contacts).
@@ -422,6 +502,7 @@ class ScenarioConfig:
         self.vaccination.validate()
         self.interventions.validate()
         self.healthcare.validate()
+        self.network.validate(n_age)
         self.simulation.validate()
         if self.contact_matrix is not None:
             cm = np.asarray(self.contact_matrix, dtype=float)
@@ -456,6 +537,7 @@ class ScenarioConfig:
                 interventions=interventions.get("interventions", [])
             ),
             healthcare=HealthcareConfig(**d.get("healthcare", {})),
+            network=NetworkConfig(**d.get("network", {})),
             simulation=SimulationConfig(**d.get("simulation", {})),
             contact_matrix=d.get("contact_matrix"),
         )
