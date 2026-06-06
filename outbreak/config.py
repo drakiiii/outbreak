@@ -169,8 +169,18 @@ class DiseaseConfig:
     # again. ``None`` or 0 disables waning (lifelong immunity).
     waning_immunity_days: Optional[float] = None
 
+    # Shape of the per-stage sojourn-time distribution (a gamma "shape" k).
+    #   1.0 => exponential durations (memoryless; high variability, CV = 1).
+    #   larger => durations cluster tightly around their mean (CV = 1/sqrt(k)).
+    # Real incubation/infectious periods are peaked, not exponential, so a value
+    # of ~4 is more realistic than 1. Honoured by the AGENT engine (which samples
+    # an explicit duration per individual); the compartmental engine uses
+    # exponential sojourns intrinsically and ignores this.
+    duration_dispersion: float = 1.0
+
     def validate(self, n_age: int) -> "DiseaseConfig":
         _check_positive(self.r0, "r0")
+        _check_positive(self.duration_dispersion, "duration_dispersion")
         # Loop over field names and validate each via getattr, avoiding a wall of
         # near-identical checks. Returns self so callers can chain .validate().
         for fld in (
@@ -574,6 +584,7 @@ def covid_like() -> DiseaseConfig:
         hospital_stay=8.0,
         icu_stay=10.0,
         waning_immunity_days=270.0,
+        duration_dispersion=4.0,    # realistic peaked stage durations (CV ~ 0.5)
     )
 
 
@@ -595,6 +606,7 @@ def influenza_like() -> DiseaseConfig:
         hospital_stay=5.0,
         icu_stay=7.0,
         waning_immunity_days=200.0,
+        duration_dispersion=4.0,    # realistic peaked stage durations (CV ~ 0.5)
     )
 
 
@@ -616,6 +628,7 @@ def measles_like() -> DiseaseConfig:
         hospital_stay=6.0,
         icu_stay=8.0,
         waning_immunity_days=None,  # lifelong immunity
+        duration_dispersion=6.0,    # measles incubation is famously tightly clustered
     )
 
 

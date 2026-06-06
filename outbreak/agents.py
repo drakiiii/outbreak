@@ -108,6 +108,8 @@ class AgentModel:
 
         params = resolve_parameters(config)
         self.p = params
+        # Shape of the per-stage sojourn-time distribution (k=1 => exponential).
+        self.duration_shape = float(params.duration_dispersion)
         self.r0_realized = config.disease.r0
 
         self.t = 0
@@ -133,6 +135,10 @@ class AgentModel:
         self.vacc = np.zeros(n, dtype=bool)
         # Per-agent infectiousness multiplier (set when infected). Mean one.
         self.infectivity = np.ones(n, dtype=float)
+        # Per-agent countdown: days left in the current timed disease stage. Only
+        # meaningful while an agent is in E/Ip/Ia/Is/H/C; ignored otherwise. A
+        # fresh duration is sampled each time an agent enters a timed stage.
+        self.timer = np.zeros(n, dtype=float)
 
         # Pre-existing immunity.
         imm = self.config.population.initial_immune_fraction
@@ -162,6 +168,9 @@ class AgentModel:
                 self.state[chosen[asymp]] = IA
                 self.state[chosen[~asymp]] = IS
                 self._assign_infectivity(chosen)
+                # Give the seeds a remaining time in their (infectious) stage.
+                self._sample_duration(chosen[asymp], 1.0 / self.p.gamma_a)
+                self._sample_duration(chosen[~asymp], 1.0 / self.p.gamma_s)
 
     def _assign_infectivity(self, idx: np.ndarray) -> None:
         """Draw per-agent onward infectiousness for newly infected agents."""
@@ -171,6 +180,20 @@ class AgentModel:
         else:
             # Mean-one Gamma(shape=k, scale=1/k); small k => bursty superspreading.
             self.infectivity[idx] = self.rng.gamma(shape=od, scale=1.0 / od, size=idx.size)
+
+    def _sample_duration(self, idx: np.ndarray, mean_days: float) -> None:
+        """Set the stage countdown for agents ``idx`` entering a timed stage.
+
+        Durations follow a Gamma with the configured shape ``k`` and the given
+        mean, so ``CV = 1/sqrt(k)``: ``k=1`` is the memoryless exponential (high
+        spread), while larger ``k`` clusters durations tightly around the mean —
+        the realistic case for incubation/infectious periods. The mean is
+        unchanged either way, so R0 is unaffected.
+        """
+        if idx.size == 0:
+            return
+        k = self.duration_shape
+        self.timer[idx] = self.rng.gamma(k, mean_days / k, size=idx.size)
 
     # --------------------------------------------------------------- network
     def _build_network(self) -> None:
@@ -339,13 +362,19 @@ class AgentModel:
         p_inf = transition_probability(foi_agent, self.dt)
         newly = self._bernoulli(sus, p_inf)
 
-        # 3. Progression transitions, drawn from start-of-step states.
-        leave_E = self._bernoulli(self.state == E, transition_probability(self.p.sigma, self.dt))
-        leave_Ip = self._bernoulli(self.state == IP, transition_probability(self.p.gamma_p, self.dt))
-        leave_Ia = self._bernoulli(self.state == IA, transition_probability(self.p.gamma_a, self.dt))
-        leave_Is = self._bernoulli(self.state == IS, transition_probability(self.p.gamma_s, self.dt))
-        leave_H = self._bernoulli(self.state == H, transition_probability(self.p.gamma_h, self.dt))
-        leave_C = self._bernoulli(self.state == C, transition_probability(self.p.gamma_c, self.dt))
+        # 3. Progression transitions. Each agent in a timed stage carries a
+        #    countdown (self.timer) sampled when it entered the stage; it leaves
+        #    once the countdown elapses. Decrement once per step, then a stage's
+        #    leavers are the agents in that stage whose timer has run out. This
+        #    gives realistically-peaked stage durations (not exponential ones).
+        self.timer -= self.dt
+        expired = self.timer <= 0.0
+        leave_E = np.where((self.state == E) & expired)[0]
+        leave_Ip = np.where((self.state == IP) & expired)[0]
+        leave_Ia = np.where((self.state == IA) & expired)[0]
+        leave_Is = np.where((self.state == IS) & expired)[0]
+        leave_H = np.where((self.state == H) & expired)[0]
+        leave_C = np.where((self.state == C) & expired)[0]
 
         # Branch the leavers via complementary boolean masks: each `leave_*` is an
         # array of agent ids, and masking it splits those ids into two subsets.
@@ -383,6 +412,15 @@ class AgentModel:
         self.state[H_to_R] = R
         self.state[to_D] = D
         self.state[C_to_R] = R
+
+        # Sample a fresh sojourn duration for everyone entering a timed stage this
+        # step (set after the decrement so it counts down from next step).
+        self._sample_duration(newly, 1.0 / self.p.sigma)        # -> E
+        self._sample_duration(to_Ip, 1.0 / self.p.gamma_p)      # -> Ip
+        self._sample_duration(to_Ia, 1.0 / self.p.gamma_a)      # -> Ia
+        self._sample_duration(leave_Ip, 1.0 / self.p.gamma_s)   # -> Is
+        self._sample_duration(to_H, 1.0 / self.p.gamma_h)       # -> H
+        self._sample_duration(to_C, 1.0 / self.p.gamma_c)       # -> C
 
         # 5. Waning immunity R -> SUS (vaccine-derived protection is not retained).
         if self.p.omega > 0:
@@ -451,6 +489,7 @@ class AgentModel:
             "state": self.state.tolist(),
             "vacc": self.vacc.tolist(),
             "infectivity": self.infectivity.tolist(),
+            "timer": self.timer.tolist(),
             # The network is random, so its group assignments are part of the
             # state and must be persisted to resume an identical run.
             "community_weight": self.community_weight,
@@ -493,6 +532,12 @@ class AgentModel:
         self.state = st
         self.vacc = restore_array(state, "vacc", (n,), dtype=bool)
         self.infectivity = restore_array(state, "infectivity", (n,), dtype=float)
+        # Older snapshots (pre-timed-durations) won't carry a timer; default to
+        # zeros, which simply makes any in-progress stages resolve promptly.
+        if "timer" in state:
+            self.timer = restore_array(state, "timer", (n,), dtype=float)
+        else:
+            self.timer = np.zeros(n, dtype=float)
 
         # Restore the contact network. Group-id arrays are untrusted like every
         # other field: each must be length n and hold ids in [-1, n) (-1 = not a

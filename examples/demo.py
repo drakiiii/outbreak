@@ -115,6 +115,27 @@ def main():
         print(f"  {label:<16}: attack rate {100 * attack:5.1f}%   "
               f"peak {peak:,.0f} on day {peak_day:.0f}")
 
+    # 6. Stage-duration realism (agent engine): exponential vs peaked sojourn
+    #    times. Same R0 and (statistically) the same final size, but peaked
+    #    durations give a sharper, earlier wave.
+    print("\n=== Agent engine: exponential vs realistic stage durations (8-run mean) ===")
+    for dispersion in (1.0, 4.0):
+        scenario = preset_scenario("covid_like", total_population=population)
+        scenario.population.initial_infected = 500
+        scenario.disease.waning_immunity_days = None
+        scenario.disease.duration_dispersion = dispersion
+        scenario.simulation = SimulationConfig(
+            duration_days=300, engine="agent", n_agents=100_000, overdispersion=None,
+        )
+        histories = run_ensemble(scenario.validate(), n_runs=8, base_seed=0)
+        attack = np.mean([summarize(h, scenario.disease.r0).attack_rate for h in histories])
+        peak = np.mean([summarize(h, scenario.disease.r0).peak_infectious for h in histories])
+        peak_day = np.mean([summarize(h, scenario.disease.r0).peak_infectious_day
+                            for h in histories])
+        label = "exponential (k=1)" if dispersion == 1.0 else "peaked (k=4)"
+        print(f"  {label:<18}: attack rate {100 * attack:5.1f}%   "
+              f"peak {peak:,.0f} on day {peak_day:.0f}")
+
 
 if __name__ == "__main__":
     main()

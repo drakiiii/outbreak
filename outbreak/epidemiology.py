@@ -50,6 +50,11 @@ class ResolvedParams:
     f_transmission: np.ndarray        # (2,) onward-transmission factor per stratum
     infectious_duration: np.ndarray   # (n_age,) infectiousness-weighted duration
 
+    # Shape of the per-stage sojourn-time distribution (gamma "shape" k). Used by
+    # the agent engine to sample explicit, realistically-peaked stage durations;
+    # the compartmental engine uses exponential sojourns and ignores it.
+    duration_dispersion: float = 1.0
+
 
 def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
     """Resolve a scenario's disease block into arrays the engines consume."""
@@ -110,6 +115,7 @@ def resolve_parameters(config: ScenarioConfig) -> ResolvedParams:
         rel_a=rel_a,
         f_transmission=f_transmission,
         infectious_duration=infectious_duration,
+        duration_dispersion=d.duration_dispersion,
     )
 
 

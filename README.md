@@ -131,6 +131,56 @@ range of possible outcomes.
 
 ---
 
+## The scriptable way: the command line
+
+For quick runs and automation you can use the `outbreak` command — no code, no
+browser. It works straight away with `python -m outbreak …`, or as a bare
+`outbreak …` command once installed (`pip install -e .`):
+
+```bash
+# Run a COVID-like disease in 1,000,000 people for a year and print a summary:
+python -m outbreak --preset covid_like --population 1000000 --days 365
+
+# Save the full day-by-day results to a spreadsheet, and the headline numbers to JSON:
+python -m outbreak --preset influenza_like --csv results.csv --json summary.json
+
+# Use the detailed engine with households/schools/workplaces switched on:
+python -m outbreak --engine agent --n-agents 100000 --network \
+    --initial-infected 500 --r0 1.8
+
+# Run 50 random repeats and report the median and range across them:
+python -m outbreak --preset covid_like --ensemble 50
+```
+
+A single run prints a summary like:
+
+```
+=== covid_like · compartmental engine ===
+  Population            : 1,000,000
+  Total infections      : 780,123 (78.0% of population)
+  Deaths                : 2,450 (IFR 0.31%)
+  Peak infectious       : 161,000 on day 96
+  Peak ICU occupancy    : 690
+  Rt fell below 1 on    : day 110
+```
+
+Useful options (see `python -m outbreak --help` for the full list):
+
+| Option | What it does |
+|--------|--------------|
+| `--preset {covid_like,influenza_like,measles_like}` | Disease to start from. |
+| `--scenario FILE.json` | Load a scenario (or a saved run) instead of a preset. |
+| `--population`, `--initial-infected`, `--r0`, `--days` | Override the basics. |
+| `--engine {compartmental,agent}`, `--n-agents`, `--network` | Choose and configure the engine. |
+| `--ensemble N` | Run N random repeats; report median + range. |
+| `--csv FILE`, `--json FILE`, `--quiet` | Save results / suppress the printout. |
+| `--seed N`, `--no-stochastic` | Make runs repeatable, or run the smooth (luck-free) version. |
+
+> Tip: with the **agent** engine, start with a healthy number of cases (e.g.
+> `--initial-infected 500`) — a handful of cases can fizzle out purely by chance.
+
+---
+
 ## The flexible way: from Python
 
 You can also drive Outbreak in a few lines of code. Start from a built-in disease
@@ -223,6 +273,27 @@ This first version forms households by grouping people at random and applies any
 interventions evenly across all settings; modelling realistic family makeup and
 closing *only* schools (for example) are natural next steps.
 
+### Realistic stage durations
+
+How long someone stays in each phase (incubating, infectious, in hospital, …)
+isn't fixed — it varies person to person. A simple model assumes those durations
+are *exponential*, which is mathematically convenient but unrealistic: it implies
+some people leave a stage almost instantly and a few linger for an absurdly long
+time. For example, with a 14-day incubation it would have ~7% of people turning
+infectious within a day and ~10% still incubating after a month.
+
+The detailed (agent) engine instead gives **each person an explicit, realistically
+clustered duration** for every stage, controlled by a single "peakedness" knob
+(`duration_dispersion`): 1 reproduces the old exponential behaviour, while higher
+values (the built-in diseases use 4–6) make durations cluster tightly around their
+average — almost nobody leaves in a day, almost nobody lingers for a month. The
+average length is unchanged, so **R₀ and the eventual size of the epidemic stay
+the same** — but the epidemic's *timing* sharpens (a taller, earlier peak), which
+matters for hospital surges and the timing of interventions.
+
+(The fast compartmental engine uses exponential durations intrinsically; this
+realism is an agent-engine feature.)
+
 ---
 
 ## Project layout
@@ -238,7 +309,9 @@ outbreak/
 │   ├── network.py            # households / schools / workplaces for the detailed engine
 │   ├── interventions.py      # ready-made measures (mask mandate, lockdown, ...)
 │   ├── metrics.py            # turns a run into headline numbers (attack rate, peaks, ...)
-│   └── simulation.py         # the play/pause/step/save controller
+│   ├── simulation.py         # the play/pause/step/save controller
+│   ├── cli.py                # the command-line interface (`outbreak …`)
+│   └── __main__.py           # lets `python -m outbreak …` work
 ├── app/streamlit_app.py      # the interactive browser dashboard
 ├── examples/demo.py          # a runnable, no-interface demonstration
 └── tests/                    # the automated checks that keep it correct
@@ -251,7 +324,7 @@ outbreak/
 | Group | What it controls (in plain terms) |
 |-------|-----------------------------------|
 | **Population** | How many people, their age mix, how many are infected at the start, and how many are already immune. |
-| **Disease** | How contagious it is (R₀); how long each phase lasts; how infectious people are before/without symptoms; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
+| **Disease** | How contagious it is (R₀); how long each phase lasts (and how tightly those durations cluster around their average); how infectious people are before/without symptoms; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
 | **Vaccination** | When the rollout starts, how fast, the coverage limit, whether the elderly go first, and how well the vaccine blocks infection / severe illness / onward spread. |
 | **Interventions** | When measures (e.g. a lockdown) start and end, and how much they cut transmission. |
 | **Healthcare** | Number of hospital and ICU beds, and how much the death rate rises when they overflow. |
@@ -280,7 +353,10 @@ among other things, that:
 - **the two engines agree** — the detailed engine reproduces the fast engine's
   results to within a few percent, confirming they describe the same disease;
 - **contact networks keep the maths honest** — switching them on still hits the
-  R₀ you asked for, and produces the lower, later "flatten the curve" peak.
+  R₀ you asked for, and produces the lower, later "flatten the curve" peak;
+- **realistic stage durations preserve R₀ and final size** — making per-stage
+  durations peaked rather than exponential leaves the R₀ and eventual attack rate
+  unchanged, while sharpening the epidemic peak.
 
 As a maths check, the smooth (luck-free) mode lands on the textbook answer for
 the final size of an epidemic. For example, for R₀ = 2.5 the textbook says 89.3%
