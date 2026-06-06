@@ -1,0 +1,44 @@
+name: security
+
+# Periodic and on-change security scanning:
+#   * bandit     — static analysis of our own Python for insecure patterns
+#                  (eval/exec, subprocess, unsafe deserialisation, ...).
+#   * pip-audit  — checks the pinned dependencies against known-vulnerability
+#                  databases (CVEs / the Python advisory DB).
+# Runs on every push and pull request, and on a weekly schedule so newly
+# disclosed dependency vulnerabilities are caught even when the code is idle.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday at 06:00 UTC
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+jobs:
+  static-analysis:
+    name: bandit (static analysis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bandit
+      # Fail the build only on medium+ severity AND confidence findings, so CI
+      # flags genuine issues (e.g. an introduced eval/subprocess) without
+      # tripping on stylistic nitpicks.
+      - run: bandit -r outbreak app --severity-level medium --confidence-level medium
+
+  dependency-audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit
+      # Audit the exact pinned versions in the lockfile. pip-audit exits
+      # non-zero when a known vulnerability is found, failing the build.
+      - run: pip-audit -r requirements.lock --no-deps
