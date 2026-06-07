@@ -135,6 +135,15 @@ rewind to any past day, download the results as a spreadsheet (CSV), save and
 reload runs, and run an **ensemble** (many random versions at once) to see the
 range of possible outcomes.
 
+For **geography**, a second app gives a spatial map of coupled regions:
+
+```bash
+streamlit run app/metapop_app.py
+```
+
+Lay regions out in a line / ring / grid, seed one of them, and scrub through time
+to watch the epidemic spread across the map via travel between regions.
+
 ---
 
 ## The scriptable way: the command line
@@ -353,6 +362,7 @@ outbreak/
 │   ├── cli.py                # the command-line interface (`outbreak …`)
 │   └── __main__.py           # lets `python -m outbreak …` work
 ├── app/streamlit_app.py      # the interactive browser dashboard
+├── app/metapop_app.py        # the spatial / map view of coupled regions
 ├── examples/demo.py          # a runnable, no-interface demonstration
 ├── tests/                    # the automated checks that keep it correct
 └── .github/workflows/        # CI: run tests + security scans on push & weekly
@@ -630,6 +640,22 @@ seeding new regions and synchronising waves. It reuses the engines' imported-for
 hook, so the single-population models are unchanged, and it works with either
 engine. Per-region and combined summaries, time series, and arrival times are
 available, and the whole metapopulation can be saved/resumed.
+
+There are **two ways regions exchange infection**, usable together or alone:
+
+- **Prevalence coupling** (`coupling`) — the smooth, mean-field leakage above.
+- **Explicit travel** (`travel_rate`) — discrete, stochastic **importation
+  events**: each infectious person has a daily chance of taking a trip (destination
+  drawn from the mobility matrix) that seeds new infections in the region they
+  visit, at the rate a local infectious person would (`R₀/duration ·
+  susceptible-fraction`). This captures real importation — a few infectious
+  travellers igniting an outbreak somewhere new — and is the more mechanistic of
+  the two.
+
+A **spatial map view** animates all of this: `streamlit run app/metapop_app.py`
+lays the regions out (line / ring / grid / random), draws the mobility links, and
+lets you scrub through time watching the epidemic spread from the seed region
+outward.
 
 ```python
 from outbreak import MetapopulationSimulation, MetapopulationConfig, Region, preset_scenario

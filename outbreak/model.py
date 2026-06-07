@@ -469,6 +469,36 @@ class EpidemicModel:
         total = self.N.sum()
         return float(weighted / total) if total > 0 else 0.0
 
+    def infectious_count(self) -> float:
+        """Number of currently infectious people (Ip + Ia + Is), population scale."""
+        return float(self.Ip.sum() + self.Ia.sum() + self.Is.sum())
+
+    def susceptible_fraction(self) -> float:
+        """Fraction of the population currently susceptible (unvaccinated S)."""
+        total = self.N.sum()
+        return float(self.S.sum() / total) if total > 0 else 0.0
+
+    def mean_infectious_duration(self) -> float:
+        return float(self.infectious_duration.mean())
+
+    def seed_exposed(self, amount: float) -> float:
+        """Introduce ~``amount`` new infections (S -> E), e.g. imported by travel.
+
+        Allocated across ages in proportion to susceptibles. Returns the number
+        actually seeded (bounded by available susceptibles).
+        """
+        if amount <= 0:
+            return 0.0
+        s_total = self.S.sum()
+        if s_total <= 0:
+            return 0.0
+        alloc = min(float(amount), float(s_total)) * self.S / s_total
+        alloc = self._maybe_round(alloc)
+        alloc = np.minimum(alloc, self.S)
+        self.S -= alloc
+        self.E[self.STRATUM_UNVAX] += alloc
+        return float(alloc.sum())
+
     def total_living(self) -> float:
         return float(
             self.S.sum() + self.V.sum() + self.E.sum() + self.Ip.sum()

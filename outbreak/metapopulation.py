@@ -40,11 +40,17 @@ from .simulation import _json_default, build_engine
 
 @dataclass
 class Region:
-    """One geographic patch: a named population with its own initial seeding."""
+    """One geographic patch: a named population with its own initial seeding.
+
+    ``x``/``y`` are optional map coordinates (any units) used purely for the
+    spatial view; they don't affect the dynamics.
+    """
 
     name: str
     population: int
     initial_infected: int = 0
+    x: Optional[float] = None
+    y: Optional[float] = None
 
     def validate(self) -> "Region":
         if self.population <= 0:
@@ -59,10 +65,14 @@ class MetapopulationConfig:
     """A set of regions plus how they're connected."""
 
     regions: Sequence[Region]
-    coupling: float = 0.01                 # overall between-region mixing strength
+    coupling: float = 0.01                 # smooth prevalence-coupling strength
     # Optional K x K mobility matrix. None => uniform mixing with every other
     # region. The diagonal is ignored (within-region spread is the local model).
     mobility: Optional[Sequence[Sequence[float]]] = None
+    # Explicit travel: per-infectious-person daily probability of taking a trip
+    # that seeds an importation in another region (discrete, stochastic). 0 = off.
+    # Trip destinations follow the same mobility matrix.
+    travel_rate: float = 0.0
 
     def __post_init__(self) -> None:
         # Allow plain dicts (e.g. from a loaded snapshot) in place of Region objects.
@@ -75,6 +85,8 @@ class MetapopulationConfig:
             r.validate()
         if self.coupling < 0:
             raise ValueError("coupling must be >= 0")
+        if self.travel_rate < 0:
+            raise ValueError("travel_rate must be >= 0")
         if self.mobility is not None:
             m = np.asarray(self.mobility, dtype=float)
             k = len(self.regions)
@@ -107,14 +119,20 @@ class MetapopulationSimulation:
         self.base = base_scenario.validate()
         self.mobility = self.config.mobility_matrix()
         self.coupling = self.config.coupling
+        self.travel_rate = self.config.travel_rate
+        self.dt = self.base.simulation.dt
+        self._stochastic_travel = self.base.simulation.stochastic
         self._n_steps = self.base.simulation.n_steps
         self.t = 0
 
-        # Independent, reproducible RNG stream per region.
-        seeds = np.random.SeedSequence(base_seed).spawn(len(self.config.regions))
+        # Independent, reproducible RNG stream per region, plus one for the
+        # orchestrator's own travel draws.
+        k = len(self.config.regions)
+        seeds = np.random.SeedSequence(base_seed).spawn(k + 1)
+        self.rng = np.random.default_rng(seeds[k])
         self.engines = []
         self.histories: List[List[StepRecord]] = []
-        for region, seed in zip(self.config.regions, seeds):
+        for region, seed in zip(self.config.regions, seeds[:k]):
             sc = self._region_scenario(region)
             self.engines.append(build_engine(sc, rng=np.random.default_rng(seed)))
             self.histories.append([])
@@ -135,12 +153,14 @@ class MetapopulationSimulation:
         """Advance every region one step, after applying between-region coupling."""
         if self.t >= self._n_steps:
             return None
-        # 1. Current infectious prevalence in each region.
+        # 1. Smooth prevalence coupling: imported force = coupling*beta_r*(M@prev)_r.
         prevalence = np.array([e.infectious_weighted_fraction() for e in self.engines])
-        # 2. Imported force per region = coupling * beta_r * (M @ prevalence)_r.
         inflow = self.mobility @ prevalence
         for engine, flow in zip(self.engines, inflow):
             engine.imported_force = float(self.coupling * engine.beta * flow)
+        # 2. Explicit travel: infectious individuals take trips and seed importations.
+        if self.travel_rate > 0:
+            self._apply_travel()
         # 3. Step every region and record.
         records = []
         for engine, history in zip(self.engines, self.histories):
@@ -149,6 +169,40 @@ class MetapopulationSimulation:
             records.append(rec)
         self.t += 1
         return records
+
+    def _apply_travel(self) -> None:
+        """Seed importations caused by infectious individuals travelling.
+
+        Each infectious person has a daily probability ``travel_rate`` of making a
+        trip; trip destinations follow the mobility matrix. While visiting region
+        ``s`` a traveller infects new people at the same rate a local infectious
+        person would — ``(R0_s / mean_infectious_duration_s) · susceptible_frac_s``
+        per day — so the expected new infections seeded in ``s`` are::
+
+            Σ_r  infectious_r · travel_rate · M[r, s] · (R0_s/D_s) · Ssed_frac_s · dt
+
+        drawn as a Poisson count (or used directly in deterministic mode).
+        """
+        infectious = np.array([e.infectious_count() for e in self.engines])
+        if infectious.sum() <= 0:
+            return
+        # Per-destination local transmissibility: secondary infections one visiting
+        # infectious person would generate per day, given the destination's
+        # remaining susceptibles.
+        transmissibility = np.array([
+            (e.config.disease.r0 / e.mean_infectious_duration()) * e.susceptible_fraction()
+            for e in self.engines
+        ])
+        # arriving[s] = Σ_r M[s, r] * infectious_r  (infectious trips into region s).
+        # Same direction convention as the prevalence coupling (region receives
+        # from its sources, weighted by its mobility row).
+        arriving = self.mobility @ infectious
+        expected = arriving * self.travel_rate * transmissibility * self.dt
+        for engine, exp_new in zip(self.engines, expected):
+            if exp_new <= 0:
+                continue
+            amount = self.rng.poisson(exp_new) if self._stochastic_travel else exp_new
+            engine.seed_exposed(float(amount))
 
     def run_to_end(self) -> None:
         while self.step() is not None:
@@ -206,6 +260,7 @@ class MetapopulationSimulation:
             "metapop": {
                 "regions": [vars(r) for r in self.config.regions],
                 "coupling": self.config.coupling,
+                "travel_rate": self.config.travel_rate,
                 "mobility": (np.asarray(self.config.mobility).tolist()
                              if self.config.mobility is not None else None),
             },
@@ -223,7 +278,8 @@ class MetapopulationSimulation:
         m = data["metapop"]
         config = MetapopulationConfig(
             regions=[Region(**r) for r in m["regions"]],
-            coupling=m["coupling"], mobility=m.get("mobility"),
+            coupling=m["coupling"], travel_rate=m.get("travel_rate", 0.0),
+            mobility=m.get("mobility"),
         )
         sim = cls(base, config)
         states = data["engine_states"]
