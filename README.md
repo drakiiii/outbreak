@@ -141,8 +141,9 @@ For **geography**, a second app gives a spatial map of coupled regions:
 streamlit run app/metapop_app.py
 ```
 
-Lay regions out in a line / ring / grid, seed one of them, and scrub through time
-to watch the epidemic spread across the map via travel between regions.
+Lay regions out in a line / ring / grid, or as **real world cities on a map**;
+seed one of them; and scrub through time to watch the epidemic spread across the
+map via travel between regions (using a gravity model of distance and population).
 
 ---
 
@@ -629,10 +630,14 @@ step, a region's susceptibles feel an extra **imported force of infection**:
     imported_r = coupling · β_r · Σ_s  M[r, s] · prevalence_s
 
 `M` is a (row-normalised) **mobility matrix** (`M[r, s]` = how much of region
-`r`'s outside exposure comes from region `s`; default = uniform mixing with every
-other region), and `coupling` is the overall between-region strength (a small
-fraction — most transmission stays local). Using each region's own `β_r` keeps
-the imported hazard in local force-of-infection units.
+`r`'s outside exposure comes from region `s`), and `coupling` is the overall
+between-region strength (a small fraction — most transmission stays local). Using
+each region's own `β_r` keeps the imported hazard in local force-of-infection
+units. You can supply `M` explicitly, or have it derived: `mobility_model="uniform"`
+(mix equally with all others, the default) or **`"gravity"`** — flow to a region
+grows with its **population** and falls with **distance** (`M[i, j] ∝ N_j /
+d_ij^gravity_decay`, using the regions' `x`/`y` coordinates), the classic spatial
+interaction law.
 
 This is the standard coupled-patch model: the configured **R₀ is the
 within-region** reproduction number, and coupling adds spatial spread on top —
@@ -653,9 +658,10 @@ There are **two ways regions exchange infection**, usable together or alone:
   the two.
 
 A **spatial map view** animates all of this: `streamlit run app/metapop_app.py`
-lays the regions out (line / ring / grid / random), draws the mobility links, and
-lets you scrub through time watching the epidemic spread from the seed region
-outward.
+lays the regions out (line / ring / grid / random, or **real world cities on a
+map** by latitude/longitude), connects them by gravity or layout adjacency, draws
+the mobility links, and lets you scrub through time watching the epidemic spread
+from the seed region outward.
 
 ```python
 from outbreak import MetapopulationSimulation, MetapopulationConfig, Region, preset_scenario
