@@ -195,7 +195,14 @@ def main():
         sim = MetapopulationSimulation(geo_base, MetapopulationConfig(regions, coupling), base_seed=0)
         sim.run_to_end()
         arrivals = [sim.first_infection_day(i, 100) for i in range(3)]
-        print(f"  coupling {coupling}: day each region passes 100 cases -> {arrivals}")
+        print(f"  prevalence coupling {coupling}: day each region passes 100 cases -> {arrivals}")
+    # Explicit travel (discrete importation events) with smooth coupling off.
+    for travel in (0.0, 0.004):
+        sim = MetapopulationSimulation(
+            geo_base, MetapopulationConfig(regions, coupling=0.0, travel_rate=travel), base_seed=0)
+        sim.run_to_end()
+        arrivals = [sim.first_infection_day(i, 100) for i in range(3)]
+        print(f"  explicit travel {travel}: day each region passes 100 cases -> {arrivals}")
 
 
 if __name__ == "__main__":

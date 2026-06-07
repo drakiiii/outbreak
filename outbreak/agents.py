@@ -523,6 +523,37 @@ class AgentModel:
         # scale cancels (numerator and denominator are both agent-scale counts).
         return (self.p.rel_p * ip + self.p.rel_a * ia + is_) / self.n_agents
 
+    def infectious_count(self) -> float:
+        """Number of currently infectious agents (Ip + Ia + Is), population scale."""
+        return float(np.isin(self.state, (IP, IA, IS)).sum()) * self.scale
+
+    def susceptible_fraction(self) -> float:
+        """Fraction of agents currently susceptible."""
+        return float((self.state == SUS).sum()) / self.n_agents
+
+    def mean_infectious_duration(self) -> float:
+        return float(self.p.infectious_duration.mean())
+
+    def seed_exposed(self, amount: float) -> float:
+        """Move ~``amount`` (population-scale) susceptible agents to E (importation).
+
+        Picks that many susceptible individuals at random, infects them, and gives
+        them an infectiousness and a fresh latent duration. Returns the number
+        actually seeded (population scale).
+        """
+        if amount <= 0:
+            return 0.0
+        n_new = int(round(amount / self.scale))            # population amount -> agents
+        sus_idx = np.where(self.state == SUS)[0]
+        n_new = min(n_new, sus_idx.size)
+        if n_new <= 0:
+            return 0.0
+        chosen = self.rng.choice(sus_idx, size=n_new, replace=False)
+        self.state[chosen] = E
+        self._assign_infectivity(chosen)
+        self._sample_duration(chosen, 1.0 / self.p.sigma)
+        return n_new * self.scale
+
     def total_living(self) -> float:
         return float((self.state != D).sum()) * self.scale
 

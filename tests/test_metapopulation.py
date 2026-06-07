@@ -128,6 +128,58 @@ def test_save_load_roundtrip(tmp_path):
     assert a == b
 
 
+# ------------------------------------------------------------- explicit travel
+def test_travel_spreads_without_prevalence_coupling():
+    """With smooth coupling off, explicit travel alone (discrete importation
+    events) still carries the epidemic to unseeded regions."""
+    sim = _sim(coupling=0.0, regions=_regions())
+    sim.config.travel_rate = 0.0   # control: no spread
+    # rebuild with travel off vs on
+    off = MetapopulationSimulation(_base(), MetapopulationConfig(_regions(), coupling=0.0,
+                                                                 travel_rate=0.0), base_seed=0)
+    off.run_to_end()
+    on = MetapopulationSimulation(_base(), MetapopulationConfig(_regions(), coupling=0.0,
+                                                                travel_rate=0.003), base_seed=0)
+    on.run_to_end()
+    assert off.region_summary(1).total_infections == 0.0     # no coupling, no travel
+    assert on.region_summary(1).attack_rate > 0.5            # travel seeded region B
+
+
+def test_more_travel_means_earlier_arrival():
+    slow = MetapopulationSimulation(_base(), MetapopulationConfig(_regions(), coupling=0.0,
+                                                                  travel_rate=0.001), base_seed=0)
+    fast = MetapopulationSimulation(_base(), MetapopulationConfig(_regions(), coupling=0.0,
+                                                                  travel_rate=0.02), base_seed=0)
+    slow.run_to_end()
+    fast.run_to_end()
+    assert fast.first_infection_day(2, 100) <= slow.first_infection_day(2, 100)
+
+
+def test_travel_respects_mobility_direction():
+    base = _base()
+    one_way = [[0.0, 0.0], [1.0, 0.0]]      # B receives trips from A, not vice versa
+    seed_b = [Region("A", 100_000, 0), Region("B", 100_000, 50)]
+    sim = MetapopulationSimulation(
+        base, MetapopulationConfig(seed_b, coupling=0.0, travel_rate=0.02, mobility=one_way),
+        base_seed=1)
+    sim.run_to_end()
+    assert sim.region_summary(0).total_infections == 0.0     # no trips arrive in A
+
+
+def test_seed_exposed_engine_hook():
+    from outbreak.model import EpidemicModel
+    model = EpidemicModel(_base())
+    before = model.S.sum()
+    seeded = model.seed_exposed(100.0)
+    assert seeded == pytest.approx(100.0, abs=1.0)
+    assert model.S.sum() == pytest.approx(before - seeded, abs=1.0)
+
+
+def test_negative_travel_rate_rejected():
+    with pytest.raises(ValueError):
+        MetapopulationConfig(_regions(), travel_rate=-0.1).validate()
+
+
 # ----------------------------------------------------------------- validation
 def test_validation():
     with pytest.raises(ValueError):
