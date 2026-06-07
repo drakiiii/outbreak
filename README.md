@@ -40,6 +40,8 @@ below appears later in this README.
 | **Stochastic vs. deterministic** | *Stochastic* means chance is included, so every run comes out a little different (like real life). *Deterministic* means the smooth, luck-free average. |
 | **Ensemble** | Running the chance-based version many times and looking at the **range** of possible outcomes, not just one. |
 | **Contact network** | Who you actually meet: the same household, classroom and workplace each day, rather than bumping into random strangers. |
+| **Reported vs. true cases** | The *true* number infected is never fully seen in reality; surveillance only catches *some* cases, *late*. The model can report both — true infections and the "observed" case count. |
+| **Metapopulation** | A set of separate places (regions/patches), each with its own epidemic, linked by travel so the disease spreads from one to the next. |
 
 That's the whole vocabulary. The rest of this page uses these words freely, but
 always means exactly what's in this table.
@@ -85,6 +87,10 @@ always means exactly what's in this table.
   them, the death rate rises.
 - **Fading immunity & reinfection.** Optionally let immunity wear off so people
   can be infected more than once.
+- **Geography.** Run several connected regions at once and watch the disease
+  spread from one to the next via travel between them.
+- **Fit to real data.** Recover the contagiousness (and under-reporting) of a real
+  outbreak from its case curve.
 - **Pause, rewind, save and replay.** The simulation moves one step at a time, so
   you can pause it, scrub back to inspect any past day, save a run to a file and
   resume it later *exactly*, and run many random versions at once to see the range
@@ -173,6 +179,8 @@ Useful options (see `python -m outbreak --help` for the full list):
 | `--population`, `--initial-infected`, `--r0`, `--days` | Override the basics. |
 | `--engine {compartmental,agent}`, `--n-agents`, `--network` | Choose and configure the engine. |
 | `--ensemble N` | Run N random repeats; report median + range. |
+| `--ascertainment`, `--reporting-delay` | Surveillance realism: fraction of cases reported, and the reporting lag. |
+| `--fit CASES.csv` | Fit R₀ + an observation scale to an observed daily-case CSV. |
 | `--csv FILE`, `--json FILE`, `--quiet` | Save results / suppress the printout. |
 | `--seed N`, `--no-stochastic` | Make runs repeatable, or run the smooth (luck-free) version. |
 
@@ -269,9 +277,12 @@ the random-mixing version — the classic "flatten the curve" effect, emerging o
 its own. (Outbreak automatically re-tunes the transmission rate so switching
 networks on doesn't change the R₀ you asked for.)
 
-This first version forms households by grouping people at random and applies any
-interventions evenly across all settings; modelling realistic family makeup and
-closing *only* schools (for example) are natural next steps.
+Households are **age-structured** — each one is seeded with an adult, so children
+live with adults (realistic across-generation mixing) rather than being grouped
+at random. And interventions can **target a single setting**: a school closure can
+reduce school contacts only, leaving home and work untouched (see the
+`layer` option on interventions). Geography/travel between regions is the next
+frontier.
 
 ### Realistic stage durations
 
@@ -294,6 +305,33 @@ matters for hospital surges and the timing of interventions.
 (The fast compartmental engine uses exponential durations intrinsically; this
 realism is an agent-engine feature.)
 
+### Fitting to real data
+
+Outbreak can be **matched to a real outbreak**, not just used for "what if?"
+exploration. Given a series of observed daily cases, it finds the R₀ (and an
+observation/under-reporting scale) that best reproduces the data:
+
+```python
+from outbreak import fit_to_incidence, preset_scenario
+
+observed = [ ... ]   # daily case counts, aligned to day 0
+fit = fit_to_incidence(observed, preset_scenario("covid_like", total_population=1_000_000))
+print(fit.summary())          # e.g. "fitted R0 = 2.30, observation scale = 0.25 ..."
+sim_ready = fit.scenario      # a scenario with the fitted R0, ready to run forward
+```
+
+Or from the command line on a CSV of cases:
+
+```bash
+python -m outbreak --preset covid_like --population 1000000 --fit cases.csv
+```
+
+It uses the fast deterministic engine and a Poisson likelihood, profiling out the
+reporting scale so only a robust one-dimensional search over R₀ remains. Other
+parameters (durations, severity, age structure) are taken from the base scenario
+— set those to your best estimates first. The series is assumed to start at model
+day 0.
+
 ---
 
 ## Project layout
@@ -309,12 +347,15 @@ outbreak/
 │   ├── network.py            # households / schools / workplaces for the detailed engine
 │   ├── interventions.py      # ready-made measures (mask mandate, lockdown, ...)
 │   ├── metrics.py            # turns a run into headline numbers (attack rate, peaks, ...)
+│   ├── calibrate.py          # fit R₀ + reporting scale to observed case data
+│   ├── metapopulation.py     # geography: coupled regions linked by mobility
 │   ├── simulation.py         # the play/pause/step/save controller
 │   ├── cli.py                # the command-line interface (`outbreak …`)
 │   └── __main__.py           # lets `python -m outbreak …` work
 ├── app/streamlit_app.py      # the interactive browser dashboard
 ├── examples/demo.py          # a runnable, no-interface demonstration
-└── tests/                    # the automated checks that keep it correct
+├── tests/                    # the automated checks that keep it correct
+└── .github/workflows/        # CI: run tests + security scans on push & weekly
 ```
 
 ---
@@ -324,15 +365,316 @@ outbreak/
 | Group | What it controls (in plain terms) |
 |-------|-----------------------------------|
 | **Population** | How many people, their age mix, how many are infected at the start, and how many are already immune. |
-| **Disease** | How contagious it is (R₀); how long each phase lasts (and how tightly those durations cluster around their average); how infectious people are before/without symptoms; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
+| **Disease** | How contagious it is (R₀); how long each phase lasts (and how tightly those durations cluster around their average); how infectious people are before/without symptoms; how susceptible each age is to infection; and the chances — by age — of needing hospital, intensive care, or dying. Whether immunity fades. |
 | **Vaccination** | When the rollout starts, how fast, the coverage limit, whether the elderly go first, and how well the vaccine blocks infection / severe illness / onward spread. |
 | **Interventions** | When measures (e.g. a lockdown) start and end, and how much they cut transmission. |
 | **Healthcare** | Number of hospital and ICU beds, and how much the death rate rises when they overflow. |
+| **Environment** | Seasonal swing in transmissibility (amplitude, period, peak day) and an external/spillover infection rate (importations or an animal reservoir). |
+| **Reporting** | Surveillance realism: what fraction of cases are detected (ascertainment) and the reporting delay — produces an "observed cases" series. |
 | **Network** (detailed engine) | Whether to switch on households/schools/workplaces, their typical sizes, which ages attend school or work, and how much spread happens in each setting. |
 | **Simulation** | How many days to run, the random seed (for repeatable runs), whether to include randomness, and which engine to use. |
 
 Three ready-made diseases are included to start from: `covid_like`,
 `influenza_like` and `measles_like`.
+
+---
+
+## Model details (technical reference)
+
+This section documents the full model for readers who want the mechanics. The
+plain-language sections above still apply — this just spells out what's happening
+underneath. Terms like R₀, Rₜ and "compartment" are defined in the plain-language
+primer near the top of this page.
+
+### Population and demography
+
+- The population is split into **age groups** (default four: `0-17`, `18-49`,
+  `50-64`, `65+`, with population shares `0.22 / 0.42 / 0.19 / 0.17`). Labels and
+  shares are configurable; any number of groups is supported.
+- Group head-counts are whole numbers (apportioned by the largest-remainder rule
+  so they sum exactly to the total population).
+- The population is **closed**: there are no births or non-disease deaths, and no
+  migration. The only way people leave is by dying of the disease. (Long-run
+  demography is a possible future extension.)
+- Seeding: `initial_infected` people start infectious at day 0; an optional
+  `initial_immune_fraction` start already recovered/immune.
+
+### Disease states (compartments)
+
+Each person is in exactly one state. Susceptible people are additionally flagged
+by vaccination status; the infectious/clinical states are tracked per
+vaccination stratum (unvaccinated / vaccinated).
+
+| State | Meaning |
+|-------|---------|
+| **S** | Susceptible, unvaccinated |
+| **V** | Susceptible, vaccinated (partial protection) |
+| **E** | Exposed — infected but not yet infectious (latent) |
+| **Ip** | Pre-symptomatic infectious (will go on to develop symptoms) |
+| **Ia** | Asymptomatic infectious (never develops symptoms) |
+| **Is** | Symptomatic infectious |
+| **H** | Hospitalised (non-ICU) |
+| **C** | Critical — in intensive care (ICU) |
+| **R** | Recovered (immune, unless immunity wanes) |
+| **D** | Dead |
+
+### Natural history (how people move between states)
+
+```
+                          ┌──────────────► Ia ──────────────┐
+   S/V ──(infection)──► E ─┤                                 ├──► R ──(waning)──► S
+                          └► Ip ──► Is ──┬───────────────────┘
+                                         └► H ──┬─────────────► R
+                                                └► C ──┬──────► R
+                                                       └──────► D
+```
+
+- **E → Ip or Ia:** on leaving the latent stage, a person is asymptomatic with
+  probability `asymptomatic_fraction` (per age), otherwise pre-symptomatic.
+- **Ip → Is:** every pre-symptomatic person becomes symptomatic.
+- **Ia → R:** asymptomatic people recover.
+- **Is → H or R:** a symptomatic person is hospitalised with probability
+  `hospitalization_rate` (per age, and reduced for the vaccinated — see
+  vaccination), otherwise recovers.
+- **H → C or R:** a hospitalised person needs ICU with probability `icu_rate`
+  (per age), otherwise recovers.
+- **C → D or R:** an ICU patient dies with probability `death_rate` (per age,
+  raised under ICU overflow — see healthcare), otherwise recovers.
+- **R → S:** if waning is enabled, recovered people return to susceptible at rate
+  `1 / waning_immunity_days`, allowing reinfection.
+
+So severity is a **conditional cascade**: overall infection-fatality ratio ≈
+`P(symptomatic) × hospitalisation × ICU × death`, each factor age-specific. The
+**infection fatality ratio (IFR)** and **attack rate** reported in summaries fall
+straight out of this.
+
+### How long each stage lasts (sojourn times)
+
+Mean stage durations are set by `latent_period`, `presymptomatic_period`,
+`symptomatic_period`, `asymptomatic_infectious_period`, `hospital_stay` and
+`icu_stay` (all in days).
+
+- **Compartmental engine:** transitions use a constant per-step hazard, so stage
+  durations are **exponentially** distributed (memoryless).
+- **Agent engine:** each individual is given an **explicit gamma-distributed
+  duration** when entering a stage, with shape `duration_dispersion` (k). `k = 1`
+  reproduces the exponential case; larger `k` clusters durations around the mean
+  (coefficient of variation `= 1/√k`). The mean is identical either way, so this
+  changes epidemic *timing* (peak height/date) but **not** R₀ or the final size.
+
+### Transmission and the force of infection
+
+- Transmission is **frequency-dependent** and **age-structured**, driven by a
+  **contact matrix** `C` where `C[i, j]` is the mean daily number of contacts a
+  person in age group `i` has with people in group `j`. The default is a
+  POLYMOD-style matrix; it is made *reciprocal* for the population
+  (`C[i,j]·Nᵢ = C[j,i]·Nⱼ`) so total contacts are consistent.
+- The per-age **force of infection** (instantaneous infection hazard) is
+  `λᵢ = sᵢ · ( β_eff · Σⱼ C[i,j] · (weighted infectious prevalence in j) + ε )`,
+  where infectious people contribute with phase weights — pre-symptomatic
+  `rel_infectiousness_presymptomatic`, asymptomatic
+  `rel_infectiousness_asymptomatic`, symptomatic `1.0`.
+- `sᵢ` is the **age-specific relative susceptibility** (`susceptibility`,
+  default 1): a less-susceptible age acquires proportionally fewer infections
+  (children are often less susceptible to infection, not just less severe). It is
+  folded into the R₀ calibration so the target R₀ is still hit.
+- `ε` is an optional **external/spillover hazard** — see the environment section.
+- The per-step probability a susceptible is infected is `1 − exp(−λ·dt)`.
+- `β_eff` is the calibrated per-contact transmission rate times any active
+  intervention multiplier **and the seasonal multiplier** (see below).
+
+### Setting the contagiousness: R₀ calibration and Rₜ
+
+- You specify a target **R₀**; the engine does **not** ask for the raw
+  transmission rate. It builds the **next-generation matrix** `K` (expected
+  secondary infections by age, = contact structure × infectiousness-weighted
+  expected infectious duration) and sets `β` so the dominant eigenvalue (spectral
+  radius) of `K` equals R₀. This is the standard, defensible way to parameterise
+  a structured model.
+- The age-specific **infectiousness-weighted duration** is
+  `p_asymp·rel_a·asym_period + (1−p_asymp)·(rel_p·presym + sympt)`.
+- At every step the engine reports the **effective reproduction number**
+  `Rₜ = β_eff · spectral_radius( diag(susceptible fraction by age) · K_unit )`,
+  which falls below 1 as susceptibles deplete / interventions bite — the signal
+  that the epidemic has turned over.
+
+### Superspreading and randomness
+
+- **Compartmental engine:** every flow between states is a **binomial draw**
+  (a "chain-binomial" model). Over-dispersion (`overdispersion`, a gamma shape) is
+  applied as a population-wide mean-one daily multiplier on the force of
+  infection — bursty, but aggregate. A **deterministic** mode (expected values,
+  no randomness) is available for validation.
+- **Agent engine:** outcomes are realised per individual, so randomness and
+  fade-out emerge naturally (it is always stochastic). Over-dispersion instead
+  gives **each infected person their own mean-one infectiousness multiplier**, so
+  a minority of people drive most transmission — genuine individual-level
+  superspreading. Because the multiplier averages to one, R₀ is unchanged.
+
+### Contact networks (agent engine)
+
+Optionally (`NetworkConfig(enabled=True)`) the agent engine adds explicit,
+repeated-contact **layers** on top of an age-mixed **community** layer:
+
+- **Households** partition everyone into small groups (sizes drawn from
+  `household_size_distribution`); *density-dependent* (you effectively contact all
+  housemates).
+- **Schools** group school-age agents; **workplaces** group working-age agents
+  (configurable age bands and mean sizes); *frequency-dependent* (per-person
+  contact rate doesn't grow without bound with group size).
+
+Each layer has a relative `weight`. The engine derives each layer's age-mixing
+matrix from the *actual* constructed groups, sums them (weighted) with the
+community matrix into one **effective contact matrix**, and calibrates a single
+global `β` on that — so a networked run still reproduces the target R₀, and the
+within-group stochastic transmission matches it in expectation. The visible
+effect is a **lower, later peak** for the same R₀ (clustering depletes local
+susceptibles).
+
+Households are **age-structured** by default (each seeded with an adult, so
+children co-reside with adults), or random if
+`NetworkConfig(age_structured_households=False)`. **Interventions can target a
+single layer** via `Intervention(..., layer="school")` (or the `layer=` argument
+to the NPI helpers): the agent engine then scales only that layer's transmission,
+while the compartmental engine — having no explicit settings — applies only
+global (untargeted) interventions.
+
+### Vaccination
+
+A **leaky** vaccine, rolled out from `start_day` at `daily_rate` (fraction of the
+population per day) up to a `coverage_cap`, oldest groups first if
+`prioritize_elderly`. It has three independent efficacies:
+
+- `ve_susceptibility` — reduces the chance of being infected (scales the force of
+  infection on vaccinated susceptibles, who sit in state **V**);
+- `ve_severity` — reduces the chance of progressing to hospitalisation (applied
+  once, to avoid double-counting along the cascade);
+- `ve_transmission` — reduces a vaccinated infected person's onward
+  infectiousness.
+
+### Non-pharmaceutical interventions (NPIs)
+
+Each intervention is a time window `[start_day, end_day)` with a
+`transmission_reduction`. While active it multiplies the transmission rate by
+`(1 − reduction)`; **multiple active interventions stack multiplicatively**.
+Helpers (`mask_mandate`, `social_distancing`, `school_closure`, `lockdown`,
+`test_trace_isolate`) are just named windows with typical strengths. (In the
+current version interventions scale all contact settings uniformly.)
+
+### Healthcare capacity
+
+- `icu_capacity` sets the number of ICU beds. When ICU occupancy exceeds it, the
+  death probability for the over-capacity *share* of patients is multiplied by
+  `overflow_mortality_multiplier` — so an overwhelmed health system kills more
+  people. Occupancy is compared at population scale (the agent engine scales its
+  sampled counts up first).
+- `hospital_capacity` can be set but currently only ICU overflow affects
+  mortality; it does not yet change dynamics.
+
+### Transmission environment: seasonality and external spillover
+
+Two optional, off-by-default effects (in `EnvironmentConfig`) shared by both
+engines:
+
+- **Seasonality.** Transmissibility is multiplied by
+  `1 + seasonal_amplitude · cos(2π·(day − seasonal_peak_day) / seasonal_period_days)`,
+  so the effective reproduction number swings above and below its calibrated
+  value through the year — the recurring winter/summer pattern of real
+  respiratory diseases. Because the cosine averages to zero over a period, the
+  **target R₀ is the annual average** and calibration is unchanged.
+- **External / spillover force of infection.** A constant background hazard
+  `external_infection_rate` (per susceptible per day, also modulated by season)
+  of being infected from *outside* the modelled population — importations from
+  elsewhere, or a zoonotic/environmental reservoir (e.g. rodent-borne spillover).
+  This lets outbreaks **start with no initial cases**, **re-ignite after
+  fade-out**, or **persist even when person-to-person spread alone (R₀ < 1) would
+  die out** — the missing ingredient for reservoir-driven diseases.
+
+### Detection and reporting (observed cases)
+
+The compartments above are the *true* epidemic, which is never fully observed in
+reality. A `ReportingConfig` adds a **surveillance layer**: reported cases are
+symptomatic onsets thinned by an `ascertainment` fraction (only some cases are
+detected) and pushed back by a `reporting_delay_days` lag. This produces a
+**reported-cases** series — what real case data would look like — alongside the
+true incidence, so you can compare against observed data (and it's what the
+calibration tooling fits to). It's a pure post-processing transform of the run
+history, so it changes only the reported outputs, never the dynamics. The default
+(ascertainment 1, no delay) makes reported cases equal true symptomatic onsets.
+
+### Waning immunity and reinfection
+
+If `waning_immunity_days` is set, recovered people return to susceptible at rate
+`1 / waning_immunity_days`. With waning, the cumulative **attack rate can exceed
+100%** (people are counted each time they're infected) and the epidemic can
+settle into recurring waves rather than burning out once.
+
+### Geography: coupled regions (metapopulation)
+
+A single scenario describes one well-mixed (age-structured) population.
+`MetapopulationSimulation` runs **several regions at once** — each its own
+engine and epidemic — and **couples** them so the disease spreads spatially. Each
+step, a region's susceptibles feel an extra **imported force of infection**:
+
+    imported_r = coupling · β_r · Σ_s  M[r, s] · prevalence_s
+
+`M` is a (row-normalised) **mobility matrix** (`M[r, s]` = how much of region
+`r`'s outside exposure comes from region `s`; default = uniform mixing with every
+other region), and `coupling` is the overall between-region strength (a small
+fraction — most transmission stays local). Using each region's own `β_r` keeps
+the imported hazard in local force-of-infection units.
+
+This is the standard coupled-patch model: the configured **R₀ is the
+within-region** reproduction number, and coupling adds spatial spread on top —
+seeding new regions and synchronising waves. It reuses the engines' imported-force
+hook, so the single-population models are unchanged, and it works with either
+engine. Per-region and combined summaries, time series, and arrival times are
+available, and the whole metapopulation can be saved/resumed.
+
+```python
+from outbreak import MetapopulationSimulation, MetapopulationConfig, Region, preset_scenario
+
+base = preset_scenario("covid_like", total_population=100_000)
+regions = [Region("Capital", 100_000, initial_infected=50),
+           Region("Town",    100_000, initial_infected=0),
+           Region("Village", 100_000, initial_infected=0)]
+sim = MetapopulationSimulation(base, MetapopulationConfig(regions, coupling=0.02))
+sim.run_to_end()
+print([sim.first_infection_day(i, 100) for i in range(3)])   # arrival day per region
+```
+
+### The two engines and population scaling
+
+- **Compartmental** tracks real-valued counts per age group × vaccination
+  stratum; it is fast and ideal for large populations, sweeps and big ensembles.
+- **Agent** tracks every individual as a row in NumPy arrays (age, state,
+  vaccination flag, infectiousness, stage timer, network groups). To stay fast it
+  can simulate a representative sample of `n_agents` people and scale reported
+  counts by `total_population / n_agents`; capacities are compared at population
+  scale so overflow behaves correctly.
+- They describe the **same disease** with the **same R₀ calibration**, and agree
+  on the final size in the mean-field limit (the agent model is a stochastic
+  realisation of the compartmental one).
+
+### Time stepping and outputs
+
+- The simulation advances in discrete steps of `dt` days (default 1). All
+  transitions in a step are computed from the start-of-step state and applied
+  together, so update order doesn't matter.
+- Each step yields a record of: every compartment total; daily incidence (new
+  infections, symptomatic onsets, hospitalisations, ICU admissions, deaths);
+  Rₜ; the effective transmission rate; ICU overflow; and per-age infectious and
+  death counts.
+- A run summary derives the **attack rate**, **IFR**, peak infectious /
+  hospital / ICU occupancy and their timing, peak daily incidence, peak Rₜ, the
+  day Rₜ first drops below 1, and the day the epidemic ends. Ensembles report
+  pointwise median and quantile bands across runs.
+
+### Defaults are illustrative
+
+The presets and default contact/severity parameters are qualitatively realistic
+but **not fitted to any specific real disease or country**. Calibrate to data
+before drawing real-world conclusions.
 
 ---
 
@@ -356,7 +698,11 @@ among other things, that:
   R₀ you asked for, and produces the lower, later "flatten the curve" peak;
 - **realistic stage durations preserve R₀ and final size** — making per-stage
   durations peaked rather than exponential leaves the R₀ and eventual attack rate
-  unchanged, while sharpening the epidemic peak.
+  unchanged, while sharpening the epidemic peak;
+- **the transmission-environment features behave** — age-specific susceptibility
+  still hits the target R₀ while sparing less-susceptible ages; seasonality swings
+  transmissibility on a yearly cosine; and an external/spillover force starts an
+  outbreak from zero initial cases and sustains a sub-critical (R₀ < 1) disease.
 
 As a maths check, the smooth (luck-free) mode lands on the textbook answer for
 the final size of an epidemic. For example, for R₀ = 2.5 the textbook says 89.3%
@@ -375,11 +721,11 @@ pytest                # run the full suite of checks
 No model is reality. The main simplifications to keep in mind:
 
 - **Who-meets-whom.** The fast engine assumes people mix at random within their
-  age group. The detailed engine can do the same, or add households/schools/
-  workplaces — but in this first version households are formed by random grouping
-  (not realistic families), and interventions apply evenly everywhere. Realistic
-  family makeup, closing individual settings, and geography/travel between regions
-  are the obvious next steps.
+  age group. The detailed engine can add households (with adults and children),
+  schools and workplaces, and target measures at individual settings. Geography is
+  handled separately by the **metapopulation** layer (coupled regions linked by a
+  mobility matrix); explicit individual travel and finer commuting patterns are
+  possible refinements.
 - **Superspreading is modelled in two slightly different ways** by the two engines
   (a population-wide "bumpiness" factor in the fast engine; genuine
   person-by-person variation in the detailed one).
@@ -403,6 +749,13 @@ and has no login system by default.
   project.
 - **Dependencies can be locked down.** `requirements.lock` pins every piece of
   supporting software to an exact, fingerprinted version.
+- **Security is scanned automatically and periodically.** Two checks run on every
+  change *and* weekly on a schedule (`.github/workflows/security.yml`):
+  [`bandit`](https://bandit.readthedocs.io/) static-analyses the code for insecure
+  patterns, and [`pip-audit`](https://pypi.org/project/pip-audit/) checks the
+  pinned dependencies against known-vulnerability databases. Both are currently
+  clean. Run them locally with `pip install -e ".[dev]"` then
+  `bandit -r outbreak app` and `pip-audit -r requirements.lock --no-deps`.
 - **Before putting it on the public internet**, add a login and limits on how much
   each visitor can run (big simulations use real computing power).
 

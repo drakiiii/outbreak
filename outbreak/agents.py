@@ -110,10 +110,14 @@ class AgentModel:
         self.p = params
         # Shape of the per-stage sojourn-time distribution (k=1 => exponential).
         self.duration_shape = float(params.duration_dispersion)
+        self.susceptibility = params.susceptibility    # (n_age,) relative susceptibility
         self.r0_realized = config.disease.r0
 
         self.t = 0
         self.cumulative_vaccinated = 0.0
+        # Per-step imported infection hazard from other regions (set by a
+        # metapopulation orchestrator; 0 for a standalone run).
+        self.imported_force = 0.0
         self._init_agents()
         # Build contact layers (if enabled) and calibrate beta on the resulting
         # effective contact structure. _build_network sets self.contact-derived
@@ -223,21 +227,44 @@ class AgentModel:
         """
         c_eff = self.community_weight * self.contact
         self.layer_scaling = []
+        self.layer_mixing = []          # each layer's age-mixing matrix, for Rt/NPIs
         for layer in self.layers:
-            c_eff = c_eff + layer.weight * layer_mixing_matrix(
-                layer, self.age, self.n_age, self.N
-            )
+            mixing = layer_mixing_matrix(layer, self.age, self.n_age, self.N)
+            self.layer_mixing.append(mixing)
+            c_eff = c_eff + layer.weight * mixing
             # Cache the per-group divisor used by the stochastic within-group FOI.
             self.layer_scaling.append(layer.group_scaling())
+        # Beta is calibrated on the intervention-free contact structure, so the
+        # target R0 is the "no measures" reproduction number.
         self.c_eff = c_eff
-        self.beta = calibrate_beta(self.c_eff, self.p.infectious_duration, self.config.disease.r0)
+        self.beta = calibrate_beta(
+            self.c_eff, self.p.infectious_duration, self.config.disease.r0,
+            self.susceptibility,
+        )
+
+    def _effective_contact(self, day: float) -> np.ndarray:
+        """Contact structure with each channel scaled by its active interventions.
+
+        Global interventions hit every channel; a layer-targeted one (e.g. a
+        school closure) scales only its own layer. Used for the reported Rt.
+        """
+        iv = self.config.interventions
+        c = iv.multiplier(day, "community") * self.community_weight * self.contact
+        for layer, mixing in zip(self.layers, self.layer_mixing):
+            c = c + iv.multiplier(day, layer.name) * layer.weight * mixing
+        return c
 
     # --------------------------------------------------------------- helpers
     def current_day(self) -> float:
         return self.t * self.dt
 
     def beta_effective(self, day: float) -> float:
-        return self.beta * self.config.interventions.multiplier(day)
+        # Calibrated rate, scaled by active interventions and the seasonal cycle.
+        return (
+            self.beta
+            * self.config.interventions.multiplier(day)
+            * self.config.environment.seasonal_multiplier(day)
+        )
 
     def _counts_by_age(self, mask: np.ndarray) -> np.ndarray:
         """Number of agents in each age group among those selected by ``mask``."""
@@ -262,8 +289,11 @@ class AgentModel:
         partly local), but remains a good summary diagnostic.
         """
         sus = self.susceptibility_by_age()
-        k = sus[:, None] * ngm_unit(self.c_eff, self.p.infectious_duration)
-        return self.beta_effective(day) * spectral_radius(k)
+        # Use the per-day effective contact structure (interventions baked in per
+        # channel); seasonality multiplies the calibrated beta.
+        c_eff_t = self._effective_contact(day)
+        k = sus[:, None] * ngm_unit(c_eff_t, self.p.infectious_duration, self.susceptibility)
+        return self.beta * self.config.environment.seasonal_multiplier(day) * spectral_radius(k)
 
     # ----------------------------------------------------------- transitions
     def _bernoulli(self, mask: np.ndarray, prob) -> np.ndarray:
@@ -324,8 +354,12 @@ class AgentModel:
 
         # 2. Force of infection from the current infectious agents. Two channels:
         #    (a) the age-mixed community layer, and (b) within-group transmission
-        #    in each network layer (households/schools/workplaces).
-        beta_eff = self.beta_effective(day)
+        #    in each network layer. Each channel is scaled by its own active
+        #    interventions, so a layer-targeted NPI (e.g. a school closure) hits
+        #    only that layer. beta_season is the calibrated rate times seasonality.
+        iv = self.config.interventions
+        beta_season = self.beta * self.config.environment.seasonal_multiplier(day)
+        beta_eff = beta_season * iv.multiplier(day)   # global-only, for the record field
         # Per-agent infectious-phase weight (0 for non-infectious agents).
         weight = np.zeros(self.n_agents)
         is_ip, is_ia, is_is = self.state == IP, self.state == IA, self.state == IS
@@ -341,7 +375,8 @@ class AgentModel:
         # (a) Community: pressure per age -> per-age FOI -> back onto each agent.
         pressure = np.bincount(self.age, weights=contrib, minlength=self.n_age)
         prevalence = pressure / self.N_safe
-        foi_comm = beta_eff * self.community_weight * (self.contact @ prevalence)  # (n_age,)
+        comm_beta = beta_season * iv.multiplier(day, "community") * self.community_weight
+        foi_comm = comm_beta * (self.contact @ prevalence)   # (n_age,)
         foi_agent = foi_comm[self.age]                       # (n_agents,)
 
         # (b) Network layers: each susceptible gains FOI from the infectious load
@@ -351,9 +386,17 @@ class AgentModel:
             member = gid >= 0
             # Total infectious contribution in each group of this layer.
             load = np.bincount(gid[member], weights=contrib[member], minlength=scaling.size)
-            # Add each member's own-group exposure (gather load/scaling by group id).
+            # Add each member's own-group exposure (gather load/scaling by group id),
+            # scaled by this layer's own active interventions.
             gm = gid[member]
-            foi_agent[member] += beta_eff * layer.weight * load[gm] / scaling[gm]
+            layer_beta = beta_season * iv.multiplier(day, layer.name) * layer.weight
+            foi_agent[member] += layer_beta * load[gm] / scaling[gm]
+
+        # (c) External/spillover hazard (importations / reservoir) plus any
+        #     imported force from other regions, then scale the whole per-agent
+        #     hazard by each agent's age-specific susceptibility.
+        external = self.config.environment.external_force(day) + self.imported_force
+        foi_agent = self.susceptibility[self.age] * (foi_agent + external)
 
         ve_sus = self.config.vaccination.ve_susceptibility
         sus = self.state == SUS
@@ -471,6 +514,14 @@ class AgentModel:
             deaths_by_age=deaths_by_age,
             **kw,
         )
+
+    def infectious_weighted_fraction(self) -> float:
+        """Infectiousness-weighted infectious prevalence (for region coupling)."""
+        ip = float((self.state == IP).sum())
+        ia = float((self.state == IA).sum())
+        is_ = float((self.state == IS).sum())
+        # scale cancels (numerator and denominator are both agent-scale counts).
+        return (self.p.rel_p * ip + self.p.rel_a * ia + is_) / self.n_agents
 
     def total_living(self) -> float:
         return float((self.state != D).sum()) * self.scale

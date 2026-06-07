@@ -12,8 +12,25 @@ agent-based) to show they agree.
 
 import numpy as np
 
-from outbreak import Simulation, preset_scenario, run_ensemble
-from outbreak.config import InterventionConfig, NetworkConfig, SimulationConfig, VaccinationConfig
+from outbreak import (
+    MetapopulationConfig,
+    MetapopulationSimulation,
+    Region,
+    Simulation,
+    fit_to_incidence,
+    preset_scenario,
+    run_ensemble,
+)
+from outbreak.config import (
+    DiseaseConfig,
+    EnvironmentConfig,
+    InterventionConfig,
+    NetworkConfig,
+    PopulationConfig,
+    ScenarioConfig,
+    SimulationConfig,
+    VaccinationConfig,
+)
 from outbreak.interventions import lockdown
 from outbreak.metrics import summarize
 
@@ -135,6 +152,50 @@ def main():
         label = "exponential (k=1)" if dispersion == 1.0 else "peaked (k=4)"
         print(f"  {label:<18}: attack rate {100 * attack:5.1f}%   "
               f"peak {peak:,.0f} on day {peak_day:.0f}")
+
+    # 7. Transmission environment: an external/spillover force of infection can
+    #    start an outbreak with NO initial cases (importations / a reservoir),
+    #    and age-specific susceptibility reshapes who gets infected.
+    print("\n=== Transmission environment ===")
+    for rate in (0.0, 5e-5):
+        scenario = ScenarioConfig(
+            population=PopulationConfig(total_population=population, initial_infected=0),
+            disease=DiseaseConfig(name="spillover_demo", r0=1.6, waning_immunity_days=None),
+            environment=EnvironmentConfig(external_infection_rate=rate),
+            simulation=SimulationConfig(duration_days=250, stochastic=False, overdispersion=None),
+        )
+        s = Simulation(scenario.validate()); s.run_to_end(); summ = s.summary()
+        tag = "no spillover" if rate == 0 else f"spillover {rate:.0e}/day"
+        print(f"  {tag:<18} (0 initial cases): total infections {summ.total_infections:,.0f}")
+
+    # 8. Calibration to data: recover an unknown R0 (and reporting fraction) from
+    #    a noisy, under-reported case curve.
+    print("\n=== Calibration to observed data ===")
+    truth_r0, truth_scale = 2.4, 0.3
+    sc = preset_scenario("covid_like", total_population=population)
+    sc.disease.r0 = truth_r0
+    sc.simulation = SimulationConfig(stochastic=False, overdispersion=None, duration_days=160)
+    sim = Simulation(sc.validate()); sim.run_to_end()
+    sym = np.array(sim.to_columns()["new_symptomatic"])
+    observed = np.random.default_rng(0).poisson(truth_scale * sym)   # noisy, under-reported
+    fit = fit_to_incidence(observed, preset_scenario("covid_like", total_population=population))
+    print(f"  truth : R0 = {truth_r0}, reporting scale = {truth_scale}")
+    print(f"  {fit.summary()}")
+
+    # 9. Geography: three regions in a line, only the first seeded. With coupling
+    #    the epidemic spreads from region to region over time.
+    print("\n=== Geography: spatial spread across coupled regions ===")
+    geo_base = preset_scenario("covid_like", total_population=100_000)
+    geo_base.disease.waning_immunity_days = None
+    geo_base.simulation = SimulationConfig(duration_days=250, stochastic=False, overdispersion=None)
+    regions = [Region("Capital", 100_000, initial_infected=50),
+               Region("Town", 100_000, initial_infected=0),
+               Region("Village", 100_000, initial_infected=0)]
+    for coupling in (0.0, 0.02):
+        sim = MetapopulationSimulation(geo_base, MetapopulationConfig(regions, coupling), base_seed=0)
+        sim.run_to_end()
+        arrivals = [sim.first_infection_day(i, 100) for i in range(3)]
+        print(f"  coupling {coupling}: day each region passes 100 cases -> {arrivals}")
 
 
 if __name__ == "__main__":

@@ -79,9 +79,11 @@ explains what was wrong, instead of pushing ahead with nonsense.
 > slot — you're told it doesn't fit.
 
 This applies to every part of a snapshot, including the contact-network data
-(which household/class/workplace each simulated person belongs to): those values
-are range-checked too, so a tampered file can't point a person at a group that
-doesn't exist.
+(which household/class/workplace each simulated person belongs to) and each
+person's stage countdown timer: those values are length- and range-checked too,
+so a tampered file can't point a person at a group that doesn't exist or smuggle
+in an oversized array. Multi-region (metapopulation) saves are just a bundle of
+per-region snapshots, and each one is checked by exactly the same rules.
 
 ### 3. Friendly errors instead of scary crashes
 
@@ -111,6 +113,33 @@ To install the locked, verified set:
 
 ```bash
 pip install --require-hashes -r requirements.lock
+```
+
+## Automatic, ongoing security checks
+
+Security isn't a one-time thing — new weaknesses get discovered over time, and
+new code can introduce new risks. So the project runs two automated scans, both
+**on every change** *and* **once a week on a schedule** (so a newly discovered
+problem in a dependency is caught even if nobody has touched the code):
+
+- **Code scan (`bandit`)** — reads our own Python looking for risky patterns
+  (things like running code from text, launching external programs, or unsafe
+  ways of loading data). Think of it as a spell-checker, but for security
+  mistakes.
+- **Dependency scan (`pip-audit`)** — cross-checks every supporting library and
+  its locked version against public vulnerability databases, so we're told
+  promptly if one of them turns out to have a known flaw.
+
+These run automatically on GitHub (see `.github/workflows/security.yml`); if
+either finds something, the check goes red and we get notified. **As of the most
+recent run, both scans are clean — zero findings.**
+
+You can run the exact same checks yourself:
+
+```bash
+pip install -e ".[dev]"                       # installs bandit + pip-audit
+bandit -r outbreak app                        # scan the code
+pip-audit -r requirements.lock --no-deps      # scan the dependencies
 ```
 
 ## If you put Outbreak on the internet

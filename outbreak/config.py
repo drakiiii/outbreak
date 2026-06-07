@@ -178,9 +178,18 @@ class DiseaseConfig:
     # exponential sojourns intrinsically and ignores this.
     duration_dispersion: float = 1.0
 
+    # Relative susceptibility to infection, per age (scalar or per-age sequence).
+    # 1.0 = baseline; e.g. children are often less susceptible to infection (not
+    # just less severe), which a value < 1 for the youngest band captures. Folded
+    # into the R0 calibration so the target R0 is still reproduced.
+    susceptibility: PerAge = 1.0
+
     def validate(self, n_age: int) -> "DiseaseConfig":
         _check_positive(self.r0, "r0")
         _check_positive(self.duration_dispersion, "duration_dispersion")
+        # Relative susceptibility must be non-negative (it may exceed 1).
+        if np.any(_as_array(self.susceptibility, n_age, "susceptibility") < 0):
+            raise ValueError("susceptibility must be >= 0")
         # Loop over field names and validate each via getattr, avoiding a wall of
         # near-identical checks. Returns self so callers can chain .validate().
         for fld in (
@@ -225,6 +234,9 @@ class DiseaseConfig:
 
     def death_rate_arr(self, n_age: int) -> np.ndarray:
         return _as_array(self.death_rate, n_age, "death_rate")
+
+    def susceptibility_arr(self, n_age: int) -> np.ndarray:
+        return _as_array(self.susceptibility, n_age, "susceptibility")
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +292,14 @@ class Intervention:
     start_day: int = 0
     end_day: int = 0
     transmission_reduction: float = 0.0
+    # Which contact setting this targets, for the agent engine's network layers:
+    #   None        -> global (reduces all transmission, both engines)
+    #   "community" / "household" / "school" / "workplace" -> only that layer
+    # Layer-targeted interventions are honoured by the agent engine; the
+    # compartmental engine (no explicit settings) applies only global ones.
+    layer: Optional[str] = None
+
+    LAYERS = ("community", "household", "school", "workplace")
 
     def validate(self) -> "Intervention":
         if self.start_day < 0 or self.end_day < 0:
@@ -288,6 +308,8 @@ class Intervention:
             raise ValueError("intervention end_day must be after start_day")
         if not 0.0 <= self.transmission_reduction <= 1.0:
             raise ValueError("transmission_reduction must be in [0, 1]")
+        if self.layer is not None and self.layer not in self.LAYERS:
+            raise ValueError(f"intervention layer must be None or one of {self.LAYERS}")
         return self
 
     def is_active(self, day: int) -> bool:
@@ -315,14 +337,17 @@ class InterventionConfig:
             i.validate()
         return self
 
-    def multiplier(self, day: int) -> float:
-        """Combined transmission multiplier from all active interventions.
+    def multiplier(self, day: int, layer: Optional[str] = None) -> float:
+        """Combined transmission multiplier for a given contact ``layer``.
 
         Reductions combine multiplicatively (independent layers of protection).
+        An intervention applies here if it is **global** (``layer is None``) or
+        explicitly targets ``layer``. Calling with no ``layer`` (the compartmental
+        engine's case) therefore applies only the global interventions.
         """
         m = 1.0
         for i in self.interventions:
-            if i.is_active(day):
+            if i.is_active(day) and (i.layer is None or i.layer == layer):
                 m *= (1.0 - i.transmission_reduction)  # stack reductions multiplicatively
         return m
 
@@ -354,6 +379,90 @@ class HealthcareConfig:
 
 
 # ---------------------------------------------------------------------------
+# Transmission environment: seasonality and external/spillover infection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EnvironmentConfig:
+    """The time-varying transmission environment, shared by both engines.
+
+    Two independent, off-by-default effects:
+
+    * **Seasonality.** Transmissibility is modulated by a yearly cosine, so the
+      effective reproduction number swings above/below its calibrated value as
+      the seasons change. The target R0 is interpreted as the *annual average*
+      (the cosine averages to zero over a period), so calibration is unchanged.
+
+    * **External / spillover force of infection.** A constant background hazard of
+      infection that does **not** depend on the internal epidemic — importations
+      from elsewhere, or a zoonotic/environmental reservoir (e.g. rodent-borne
+      spillover). This lets outbreaks start, re-ignite after fade-out, or persist
+      even when person-to-person spread alone (R0) is sub-critical.
+    """
+
+    # Seasonality: beta is multiplied by 1 + amplitude*cos(2π(day - peak)/period).
+    seasonal_amplitude: float = 0.0        # 0 = none; must be in [0, 1)
+    seasonal_period_days: float = 365.0
+    seasonal_peak_day: float = 0.0         # day of peak transmissibility
+
+    # External force of infection: daily per-susceptible hazard from outside the
+    # modelled population. 0 = none. Modulated by the same seasonal factor.
+    external_infection_rate: float = 0.0
+
+    def validate(self) -> "EnvironmentConfig":
+        if not 0.0 <= self.seasonal_amplitude < 1.0:
+            raise ValueError("seasonal_amplitude must be in [0, 1)")
+        if self.seasonal_period_days <= 0:
+            raise ValueError("seasonal_period_days must be > 0")
+        if self.external_infection_rate < 0:
+            raise ValueError("external_infection_rate must be >= 0")
+        return self
+
+    def seasonal_multiplier(self, day: float) -> float:
+        """Transmissibility multiplier at ``day`` (mean 1 over a full period)."""
+        if self.seasonal_amplitude == 0.0:
+            return 1.0
+        phase = 2.0 * np.pi * (day - self.seasonal_peak_day) / self.seasonal_period_days
+        return 1.0 + self.seasonal_amplitude * np.cos(phase)
+
+    def external_force(self, day: float) -> float:
+        """External per-susceptible infection hazard at ``day`` (seasonally scaled)."""
+        if self.external_infection_rate == 0.0:
+            return 0.0
+        return self.external_infection_rate * self.seasonal_multiplier(day)
+
+
+# ---------------------------------------------------------------------------
+# Detection / reporting (observation layer)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ReportingConfig:
+    """How true infections become *observed* cases — a surveillance layer.
+
+    Real case data is incomplete and delayed: only a fraction of infections are
+    ever detected, and reports lag symptom onset by a few days. This turns the
+    model's (unobservable) true symptomatic incidence into a **reported-cases**
+    series you can compare against real surveillance data. It is applied as a
+    post-processing transform of the run history, so it changes only the reported
+    outputs, never the underlying dynamics.
+
+    The default (``ascertainment = 1``, no delay) makes reported cases equal true
+    symptomatic onsets.
+    """
+
+    ascertainment: float = 1.0          # fraction of symptomatic cases reported
+    reporting_delay_days: float = 0.0   # mean lag from symptom onset to report
+
+    def validate(self) -> "ReportingConfig":
+        if not 0.0 <= self.ascertainment <= 1.0:
+            raise ValueError("ascertainment must be in [0, 1]")
+        if self.reporting_delay_days < 0:
+            raise ValueError("reporting_delay_days must be >= 0")
+        return self
+
+
+# ---------------------------------------------------------------------------
 # Contact network (agent engine only)
 # ---------------------------------------------------------------------------
 
@@ -374,15 +483,18 @@ class NetworkConfig:
     R0 (see :mod:`outbreak.network`). Weights therefore control the *mix* of where
     transmission happens, not its overall level.
 
-    v1 simplifications (documented, not hidden): households are formed by random
-    assignment (no explicit adult+child composition), and interventions scale all
-    layers uniformly. Age-structured households and per-layer NPIs (e.g. closing
-    only schools) are natural next steps the layer structure now enables.
+    Households are age-structured by default (each household is seeded with an
+    adult so children live with adults — realistic inter-generational mixing);
+    set ``age_structured_households=False`` for purely random grouping.
+    Interventions can target individual layers (e.g. closing only schools) via the
+    ``layer`` field on :class:`Intervention`.
     """
 
     enabled: bool = False
     # Probability of household sizes 1, 2, 3, ...; entry k is P(size = k+1).
     household_size_distribution: Sequence[float] = (0.28, 0.34, 0.16, 0.14, 0.05, 0.03)
+    # Seed each household with an adult (children co-reside with adults) vs random.
+    age_structured_households: bool = True
     mean_school_size: int = 30
     mean_workplace_size: int = 20
     # Age-group indices that attend school / go to work. ``None`` => sensible
@@ -500,6 +612,8 @@ class ScenarioConfig:
     vaccination: VaccinationConfig = field(default_factory=VaccinationConfig)
     interventions: InterventionConfig = field(default_factory=InterventionConfig)
     healthcare: HealthcareConfig = field(default_factory=HealthcareConfig)
+    environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+    reporting: ReportingConfig = field(default_factory=ReportingConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     # Optional explicit contact matrix (n_age x n_age). If None, a default is
@@ -512,6 +626,8 @@ class ScenarioConfig:
         self.vaccination.validate()
         self.interventions.validate()
         self.healthcare.validate()
+        self.environment.validate()
+        self.reporting.validate()
         self.network.validate(n_age)
         self.simulation.validate()
         if self.contact_matrix is not None:
@@ -547,6 +663,8 @@ class ScenarioConfig:
                 interventions=interventions.get("interventions", [])
             ),
             healthcare=HealthcareConfig(**d.get("healthcare", {})),
+            environment=EnvironmentConfig(**d.get("environment", {})),
+            reporting=ReportingConfig(**d.get("reporting", {})),
             network=NetworkConfig(**d.get("network", {})),
             simulation=SimulationConfig(**d.get("simulation", {})),
             contact_matrix=d.get("contact_matrix"),

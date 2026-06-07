@@ -15,11 +15,13 @@ Quick start
 # ``from outbreak import Simulation`` instead of reaching into ``outbreak.simulation``.
 from .config import (
     DiseaseConfig,
+    EnvironmentConfig,
     HealthcareConfig,
     Intervention,
     InterventionConfig,
     NetworkConfig,
     PopulationConfig,
+    ReportingConfig,
     ScenarioConfig,
     SimulationConfig,
     VaccinationConfig,
@@ -27,7 +29,19 @@ from .config import (
     preset_scenario,
 )
 from .agents import AgentModel
-from .metrics import EpidemicSummary, aggregate_ensemble, history_to_columns, summarize
+from .calibrate import FitResult, fit_to_incidence
+from .metapopulation import (
+    MetapopulationConfig,
+    MetapopulationSimulation,
+    Region,
+)
+from .metrics import (
+    EpidemicSummary,
+    aggregate_ensemble,
+    history_to_columns,
+    reported_incidence,
+    summarize,
+)
 from .model import EpidemicModel, StepRecord
 from .simulation import RunState, Simulation, build_engine, run_ensemble
 
@@ -43,6 +57,8 @@ __all__ = [
     "InterventionConfig",
     "Intervention",
     "HealthcareConfig",
+    "EnvironmentConfig",
+    "ReportingConfig",
     "NetworkConfig",
     "SimulationConfig",
     "DISEASE_PRESETS",
@@ -58,5 +74,11 @@ __all__ = [
     "summarize",
     "aggregate_ensemble",
     "history_to_columns",
+    "reported_incidence",
+    "fit_to_incidence",
+    "FitResult",
+    "MetapopulationSimulation",
+    "MetapopulationConfig",
+    "Region",
     "__version__",
 ]
