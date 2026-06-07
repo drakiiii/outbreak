@@ -12,7 +12,15 @@ agent-based) to show they agree.
 
 import numpy as np
 
-from outbreak import Simulation, fit_to_incidence, preset_scenario, run_ensemble
+from outbreak import (
+    MetapopulationConfig,
+    MetapopulationSimulation,
+    Region,
+    Simulation,
+    fit_to_incidence,
+    preset_scenario,
+    run_ensemble,
+)
 from outbreak.config import (
     DiseaseConfig,
     EnvironmentConfig,
@@ -173,6 +181,21 @@ def main():
     fit = fit_to_incidence(observed, preset_scenario("covid_like", total_population=population))
     print(f"  truth : R0 = {truth_r0}, reporting scale = {truth_scale}")
     print(f"  {fit.summary()}")
+
+    # 9. Geography: three regions in a line, only the first seeded. With coupling
+    #    the epidemic spreads from region to region over time.
+    print("\n=== Geography: spatial spread across coupled regions ===")
+    geo_base = preset_scenario("covid_like", total_population=100_000)
+    geo_base.disease.waning_immunity_days = None
+    geo_base.simulation = SimulationConfig(duration_days=250, stochastic=False, overdispersion=None)
+    regions = [Region("Capital", 100_000, initial_infected=50),
+               Region("Town", 100_000, initial_infected=0),
+               Region("Village", 100_000, initial_infected=0)]
+    for coupling in (0.0, 0.02):
+        sim = MetapopulationSimulation(geo_base, MetapopulationConfig(regions, coupling), base_seed=0)
+        sim.run_to_end()
+        arrivals = [sim.first_infection_day(i, 100) for i in range(3)]
+        print(f"  coupling {coupling}: day each region passes 100 cases -> {arrivals}")
 
 
 if __name__ == "__main__":

@@ -41,6 +41,7 @@ below appears later in this README.
 | **Ensemble** | Running the chance-based version many times and looking at the **range** of possible outcomes, not just one. |
 | **Contact network** | Who you actually meet: the same household, classroom and workplace each day, rather than bumping into random strangers. |
 | **Reported vs. true cases** | The *true* number infected is never fully seen in reality; surveillance only catches *some* cases, *late*. The model can report both — true infections and the "observed" case count. |
+| **Metapopulation** | A set of separate places (regions/patches), each with its own epidemic, linked by travel so the disease spreads from one to the next. |
 
 That's the whole vocabulary. The rest of this page uses these words freely, but
 always means exactly what's in this table.
@@ -86,6 +87,10 @@ always means exactly what's in this table.
   them, the death rate rises.
 - **Fading immunity & reinfection.** Optionally let immunity wear off so people
   can be infected more than once.
+- **Geography.** Run several connected regions at once and watch the disease
+  spread from one to the next via travel between them.
+- **Fit to real data.** Recover the contagiousness (and under-reporting) of a real
+  outbreak from its case curve.
 - **Pause, rewind, save and replay.** The simulation moves one step at a time, so
   you can pause it, scrub back to inspect any past day, save a run to a file and
   resume it later *exactly*, and run many random versions at once to see the range
@@ -343,6 +348,7 @@ outbreak/
 │   ├── interventions.py      # ready-made measures (mask mandate, lockdown, ...)
 │   ├── metrics.py            # turns a run into headline numbers (attack rate, peaks, ...)
 │   ├── calibrate.py          # fit R₀ + reporting scale to observed case data
+│   ├── metapopulation.py     # geography: coupled regions linked by mobility
 │   ├── simulation.py         # the play/pause/step/save controller
 │   ├── cli.py                # the command-line interface (`outbreak …`)
 │   └── __main__.py           # lets `python -m outbreak …` work
@@ -603,6 +609,40 @@ If `waning_immunity_days` is set, recovered people return to susceptible at rate
 100%** (people are counted each time they're infected) and the epidemic can
 settle into recurring waves rather than burning out once.
 
+### Geography: coupled regions (metapopulation)
+
+A single scenario describes one well-mixed (age-structured) population.
+`MetapopulationSimulation` runs **several regions at once** — each its own
+engine and epidemic — and **couples** them so the disease spreads spatially. Each
+step, a region's susceptibles feel an extra **imported force of infection**:
+
+    imported_r = coupling · β_r · Σ_s  M[r, s] · prevalence_s
+
+`M` is a (row-normalised) **mobility matrix** (`M[r, s]` = how much of region
+`r`'s outside exposure comes from region `s`; default = uniform mixing with every
+other region), and `coupling` is the overall between-region strength (a small
+fraction — most transmission stays local). Using each region's own `β_r` keeps
+the imported hazard in local force-of-infection units.
+
+This is the standard coupled-patch model: the configured **R₀ is the
+within-region** reproduction number, and coupling adds spatial spread on top —
+seeding new regions and synchronising waves. It reuses the engines' imported-force
+hook, so the single-population models are unchanged, and it works with either
+engine. Per-region and combined summaries, time series, and arrival times are
+available, and the whole metapopulation can be saved/resumed.
+
+```python
+from outbreak import MetapopulationSimulation, MetapopulationConfig, Region, preset_scenario
+
+base = preset_scenario("covid_like", total_population=100_000)
+regions = [Region("Capital", 100_000, initial_infected=50),
+           Region("Town",    100_000, initial_infected=0),
+           Region("Village", 100_000, initial_infected=0)]
+sim = MetapopulationSimulation(base, MetapopulationConfig(regions, coupling=0.02))
+sim.run_to_end()
+print([sim.first_infection_day(i, 100) for i in range(3)])   # arrival day per region
+```
+
 ### The two engines and population scaling
 
 - **Compartmental** tracks real-valued counts per age group × vaccination
@@ -681,10 +721,11 @@ pytest                # run the full suite of checks
 No model is reality. The main simplifications to keep in mind:
 
 - **Who-meets-whom.** The fast engine assumes people mix at random within their
-  age group. The detailed engine can do the same, or add households (with adults
-  and children), schools and workplaces — and can target measures at individual
-  settings. It still doesn't model **geography or travel between regions**, which
-  is the obvious next step.
+  age group. The detailed engine can add households (with adults and children),
+  schools and workplaces, and target measures at individual settings. Geography is
+  handled separately by the **metapopulation** layer (coupled regions linked by a
+  mobility matrix); explicit individual travel and finer commuting patterns are
+  possible refinements.
 - **Superspreading is modelled in two slightly different ways** by the two engines
   (a population-wide "bumpiness" factor in the fast engine; genuine
   person-by-person variation in the detailed one).

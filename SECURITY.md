@@ -82,7 +82,8 @@ This applies to every part of a snapshot, including the contact-network data
 (which household/class/workplace each simulated person belongs to) and each
 person's stage countdown timer: those values are length- and range-checked too,
 so a tampered file can't point a person at a group that doesn't exist or smuggle
-in an oversized array.
+in an oversized array. Multi-region (metapopulation) saves are just a bundle of
+per-region snapshots, and each one is checked by exactly the same rules.
 
 ### 3. Friendly errors instead of scary crashes
 

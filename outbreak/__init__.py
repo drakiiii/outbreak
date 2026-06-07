@@ -30,6 +30,11 @@ from .config import (
 )
 from .agents import AgentModel
 from .calibrate import FitResult, fit_to_incidence
+from .metapopulation import (
+    MetapopulationConfig,
+    MetapopulationSimulation,
+    Region,
+)
 from .metrics import (
     EpidemicSummary,
     aggregate_ensemble,
@@ -72,5 +77,8 @@ __all__ = [
     "reported_incidence",
     "fit_to_incidence",
     "FitResult",
+    "MetapopulationSimulation",
+    "MetapopulationConfig",
+    "Region",
     "__version__",
 ]

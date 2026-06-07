@@ -120,6 +120,9 @@ class EpidemicModel:
 
         self.t = 0
         self.cumulative_vaccinated = 0.0
+        # Per-step imported infection hazard from other regions (set by a
+        # metapopulation orchestrator; 0 for a standalone run).
+        self.imported_force = 0.0
         self._init_state()
 
     # ------------------------------------------------------------------ setup
@@ -320,9 +323,10 @@ class EpidemicModel:
         # contact @ prevalence is a matrix-vector product mixing age groups via
         # the contact matrix, giving the per-age internal force of infection.
         internal = beta_eff * noise * (self.contact @ prevalence)   # (n_age,)
-        # Add the external/spillover hazard (importations / reservoir), then scale
-        # the whole hazard by each age's relative susceptibility.
-        external = self.config.environment.external_force(day)      # scalar
+        # Add the external/spillover hazard (importations / reservoir) plus any
+        # imported force from other regions, then scale the whole hazard by each
+        # age's relative susceptibility.
+        external = self.config.environment.external_force(day) + self.imported_force
         foi = self.susceptibility * (internal + external)           # (n_age,)
 
         ve_sus = self.config.vaccination.ve_susceptibility
@@ -457,6 +461,14 @@ class EpidemicModel:
         )
 
     # ------------------------------------------------------------ diagnostics
+    def infectious_weighted_fraction(self) -> float:
+        """Infectiousness-weighted infectious prevalence (for region coupling)."""
+        weighted = (
+            self.rel_p * self.Ip.sum() + self.rel_a * self.Ia.sum() + self.Is.sum()
+        )
+        total = self.N.sum()
+        return float(weighted / total) if total > 0 else 0.0
+
     def total_living(self) -> float:
         return float(
             self.S.sum() + self.V.sum() + self.E.sum() + self.Ip.sum()

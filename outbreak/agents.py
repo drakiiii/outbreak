@@ -115,6 +115,9 @@ class AgentModel:
 
         self.t = 0
         self.cumulative_vaccinated = 0.0
+        # Per-step imported infection hazard from other regions (set by a
+        # metapopulation orchestrator; 0 for a standalone run).
+        self.imported_force = 0.0
         self._init_agents()
         # Build contact layers (if enabled) and calibrate beta on the resulting
         # effective contact structure. _build_network sets self.contact-derived
@@ -389,9 +392,10 @@ class AgentModel:
             layer_beta = beta_season * iv.multiplier(day, layer.name) * layer.weight
             foi_agent[member] += layer_beta * load[gm] / scaling[gm]
 
-        # (c) External/spillover hazard (importations / reservoir), then scale the
-        #     whole per-agent hazard by each agent's age-specific susceptibility.
-        external = self.config.environment.external_force(day)
+        # (c) External/spillover hazard (importations / reservoir) plus any
+        #     imported force from other regions, then scale the whole per-agent
+        #     hazard by each agent's age-specific susceptibility.
+        external = self.config.environment.external_force(day) + self.imported_force
         foi_agent = self.susceptibility[self.age] * (foi_agent + external)
 
         ve_sus = self.config.vaccination.ve_susceptibility
@@ -510,6 +514,14 @@ class AgentModel:
             deaths_by_age=deaths_by_age,
             **kw,
         )
+
+    def infectious_weighted_fraction(self) -> float:
+        """Infectiousness-weighted infectious prevalence (for region coupling)."""
+        ip = float((self.state == IP).sum())
+        ia = float((self.state == IA).sum())
+        is_ = float((self.state == IS).sum())
+        # scale cancels (numerator and denominator are both agent-scale counts).
+        return (self.p.rel_p * ip + self.p.rel_a * ia + is_) / self.n_agents
 
     def total_living(self) -> float:
         return float((self.state != D).sum()) * self.scale
