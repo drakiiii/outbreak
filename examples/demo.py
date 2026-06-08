@@ -203,6 +203,16 @@ def main():
         sim.run_to_end()
         arrivals = [sim.first_infection_day(i, 100) for i in range(3)]
         print(f"  explicit travel {travel}: day each region passes 100 cases -> {arrivals}")
+    # Gravity mobility: a seeded Capital reaches the nearby Town before the far Village.
+    placed = [Region("Capital", 100_000, 50, x=0, y=0),
+              Region("Town", 100_000, 0, x=1, y=0),       # near
+              Region("Village", 100_000, 0, x=5, y=0)]    # far
+    sim = MetapopulationSimulation(geo_base, MetapopulationConfig(
+        placed, coupling=0.0, travel_rate=0.01, mobility_model="gravity"), base_seed=0)
+    sim.run_to_end()
+    arrivals = [sim.first_infection_day(i, 100) for i in range(3)]
+    print(f"  gravity travel    : day each region passes 100 cases -> {arrivals} "
+          f"(Capital, then near Town, then far Village)")
 
 
 if __name__ == "__main__":

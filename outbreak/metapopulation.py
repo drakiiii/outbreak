@@ -66,13 +66,22 @@ class MetapopulationConfig:
 
     regions: Sequence[Region]
     coupling: float = 0.01                 # smooth prevalence-coupling strength
-    # Optional K x K mobility matrix. None => uniform mixing with every other
-    # region. The diagonal is ignored (within-region spread is the local model).
+    # Optional explicit K x K mobility matrix. If None, one is derived from
+    # ``mobility_model`` below. The diagonal is ignored (within-region spread is
+    # the local model).
     mobility: Optional[Sequence[Sequence[float]]] = None
+    # How to derive mobility when none is supplied:
+    #   "uniform" - mix equally with every other region.
+    #   "gravity" - flow to a region grows with its population and falls with
+    #               distance (needs x/y coordinates): M[i, j] ∝ N_j / d_ij^decay.
+    mobility_model: str = "uniform"
+    gravity_decay: float = 2.0             # distance exponent for the gravity model
     # Explicit travel: per-infectious-person daily probability of taking a trip
     # that seeds an importation in another region (discrete, stochastic). 0 = off.
     # Trip destinations follow the same mobility matrix.
     travel_rate: float = 0.0
+
+    MOBILITY_MODELS = ("uniform", "gravity")
 
     def __post_init__(self) -> None:
         # Allow plain dicts (e.g. from a loaded snapshot) in place of Region objects.
@@ -87,6 +96,10 @@ class MetapopulationConfig:
             raise ValueError("coupling must be >= 0")
         if self.travel_rate < 0:
             raise ValueError("travel_rate must be >= 0")
+        if self.mobility_model not in self.MOBILITY_MODELS:
+            raise ValueError(f"mobility_model must be one of {self.MOBILITY_MODELS}")
+        if self.gravity_decay <= 0:
+            raise ValueError("gravity_decay must be > 0")
         if self.mobility is not None:
             m = np.asarray(self.mobility, dtype=float)
             k = len(self.regions)
@@ -94,13 +107,31 @@ class MetapopulationConfig:
                 raise ValueError(f"mobility must be {k}x{k}, got {m.shape}")
             if np.any(m < 0):
                 raise ValueError("mobility entries must be non-negative")
+        elif self.mobility_model == "gravity":
+            if any(r.x is None or r.y is None for r in self.regions):
+                raise ValueError("gravity mobility_model requires x/y on every region")
         return self
+
+    def _gravity_matrix(self) -> np.ndarray:
+        """Gravity weights M[i, j] ∝ N_j / distance(i, j)^gravity_decay."""
+        coords = np.array([[r.x, r.y] for r in self.regions], dtype=float)
+        pops = np.array([r.population for r in self.regions], dtype=float)
+        # Pairwise Euclidean distances; self-distance set to inf so the diagonal
+        # weight is zero, and any coincident pair is treated as unconnected.
+        diff = coords[:, None, :] - coords[None, :, :]
+        dist = np.sqrt((diff ** 2).sum(axis=-1))
+        dist = np.where(dist == 0.0, np.inf, dist)
+        w = pops[None, :] / np.power(dist, self.gravity_decay)   # M[i, j] ∝ N_j / d^decay
+        w[~np.isfinite(w)] = 0.0
+        return w
 
     def mobility_matrix(self) -> np.ndarray:
         """Row-normalised coupling weights with a zero diagonal."""
         k = len(self.regions)
         if self.mobility is not None:
             m = np.asarray(self.mobility, dtype=float).copy()
+        elif self.mobility_model == "gravity":
+            m = self._gravity_matrix()
         else:
             m = np.ones((k, k)) - np.eye(k)        # uniform mixing with all others
         np.fill_diagonal(m, 0.0)                    # self-coupling is the local model
@@ -261,6 +292,8 @@ class MetapopulationSimulation:
                 "regions": [vars(r) for r in self.config.regions],
                 "coupling": self.config.coupling,
                 "travel_rate": self.config.travel_rate,
+                "mobility_model": self.config.mobility_model,
+                "gravity_decay": self.config.gravity_decay,
                 "mobility": (np.asarray(self.config.mobility).tolist()
                              if self.config.mobility is not None else None),
             },
@@ -280,6 +313,8 @@ class MetapopulationSimulation:
             regions=[Region(**r) for r in m["regions"]],
             coupling=m["coupling"], travel_rate=m.get("travel_rate", 0.0),
             mobility=m.get("mobility"),
+            mobility_model=m.get("mobility_model", "uniform"),
+            gravity_decay=m.get("gravity_decay", 2.0),
         )
         sim = cls(base, config)
         states = data["engine_states"]

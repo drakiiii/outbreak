@@ -180,6 +180,54 @@ def test_negative_travel_rate_rejected():
         MetapopulationConfig(_regions(), travel_rate=-0.1).validate()
 
 
+# ------------------------------------------------------------- gravity model
+def _placed_regions():
+    # A at origin, B near, C far (on a line); all seeded only in A.
+    return [Region("A", 200_000, 50, x=0.0, y=0.0),
+            Region("B", 200_000, 0, x=1.0, y=0.0),
+            Region("C", 200_000, 0, x=6.0, y=0.0)]
+
+
+def test_gravity_weights_decay_with_distance():
+    m = MetapopulationConfig(_placed_regions(), mobility_model="gravity").mobility_matrix()
+    assert np.allclose(np.diag(m), 0.0)
+    assert np.allclose(m.sum(axis=1), 1.0)               # row-normalised
+    assert m[0, 1] > m[0, 2]                             # A pulls the near region more
+
+
+def test_gravity_weights_grow_with_population():
+    regions = [Region("A", 100_000, 0, x=0, y=0),
+               Region("Big", 1_000_000, 0, x=2, y=0),
+               Region("Small", 100_000, 0, x=2, y=0.001)]   # same distance, diff size
+    m = MetapopulationConfig(regions, mobility_model="gravity").mobility_matrix()
+    assert m[0, 1] > m[0, 2]                             # the bigger region attracts more
+
+
+def test_gravity_spreads_near_region_first():
+    base = _base()
+    cfg = MetapopulationConfig(_placed_regions(), coupling=0.0, travel_rate=0.01,
+                               mobility_model="gravity")
+    sim = MetapopulationSimulation(base, cfg, base_seed=0)
+    sim.run_to_end()
+    near, far = sim.first_infection_day(1, 100), sim.first_infection_day(2, 100)
+    assert near is not None and far is not None
+    assert near < far                                   # geography: near before far
+
+
+def test_gravity_requires_coordinates():
+    no_coords = [Region("A", 100_000, 50), Region("B", 100_000, 0)]   # no x/y
+    with pytest.raises(ValueError):
+        MetapopulationConfig(no_coords, mobility_model="gravity").validate()
+
+
+def test_invalid_mobility_model_rejected():
+    with pytest.raises(ValueError):
+        MetapopulationConfig(_regions(), mobility_model="bogus").validate()
+    with pytest.raises(ValueError):
+        MetapopulationConfig(_placed_regions(), mobility_model="gravity",
+                             gravity_decay=0.0).validate()
+
+
 # ----------------------------------------------------------------- validation
 def test_validation():
     with pytest.raises(ValueError):
