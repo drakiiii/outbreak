@@ -89,30 +89,67 @@ def build_scenario() -> ScenarioConfig:
         total_population = st.number_input(
             "Total population", min_value=1_000, max_value=100_000_000,
             value=1_000_000, step=10_000,
+            help="Size of the simulated population. Mainly scales the absolute "
+                 "case and death counts; the shape of the epidemic (attack rate, "
+                 "peak timing) is largely independent of population size. Bigger "
+                 "populations also give smoother, less noisy curves.",
         )
         initial_infected = st.number_input(
             "Initial infections", min_value=1, max_value=1_000_000, value=20, step=10,
+            help="Number of infectious people seeded on day 0. More seeds make the "
+                 "outbreak take off sooner and reduce the chance of a stochastic "
+                 "fade-out, but barely change the eventual peak or final size.",
         )
         initial_immune = st.slider(
             "Initial immune fraction", 0.0, 0.95, 0.0, 0.05,
-            help="Population already immune at day 0 (prior infection / vaccination).",
+            help="Population already immune at day 0 (prior infection / vaccination). "
+                 "Higher values lower the effective reproduction number from the "
+                 "start, delaying and flattening the peak; above the herd-immunity "
+                 "threshold the outbreak can't take off at all.",
         )
 
     with st.sidebar.expander("Disease biology", expanded=True):
         r0 = st.slider("Basic reproduction number R₀", 0.5, 18.0,
-                       float(base_disease.r0), 0.1)
+                       float(base_disease.r0), 0.1,
+                       help="Average number of people one case infects in a fully "
+                            "susceptible population. The single biggest driver of the "
+                            "epidemic: higher R₀ means faster growth, an earlier and "
+                            "taller peak, and a larger final attack rate. Below 1 the "
+                            "outbreak dies out.")
         latent = st.slider("Latent period (days)", 0.5, 14.0,
-                           float(base_disease.latent_period), 0.5)
+                           float(base_disease.latent_period), 0.5,
+                           help="Average time from being infected to becoming "
+                                "infectious (the 'exposed' stage). Longer latent "
+                                "periods slow the epidemic and push the peak later, "
+                                "but change the final size only a little.")
         presym = st.slider("Pre-symptomatic infectious period (days)", 0.0, 7.0,
-                           float(base_disease.presymptomatic_period), 0.5)
+                           float(base_disease.presymptomatic_period), 0.5,
+                           help="Days a person is infectious before symptoms appear. "
+                                "More pre-symptomatic spread speeds transmission and "
+                                "makes the disease harder to control with symptom-based "
+                                "isolation or testing.")
         sympt = st.slider("Symptomatic infectious period (days)", 1.0, 21.0,
-                          float(base_disease.symptomatic_period), 0.5)
+                          float(base_disease.symptomatic_period), 0.5,
+                          help="Average days a symptomatic case stays infectious. "
+                               "Longer periods give each case more time to transmit "
+                               "(effectively raising R) and slow recovery.")
         asym_period = st.slider("Asymptomatic infectious period (days)", 1.0, 21.0,
-                                float(base_disease.asymptomatic_infectious_period), 0.5)
+                                float(base_disease.asymptomatic_infectious_period), 0.5,
+                                help="Average days an asymptomatic case stays "
+                                     "infectious. Same effect as the symptomatic "
+                                     "period, but for the silent-spreader pathway.")
         rel_asym = st.slider("Relative infectiousness (asymptomatic)", 0.0, 1.0,
-                             float(base_disease.rel_infectiousness_asymptomatic), 0.05)
+                             float(base_disease.rel_infectiousness_asymptomatic), 0.05,
+                             help="How infectious asymptomatic cases are compared with "
+                                  "symptomatic ones (1.0 = equally infectious). Higher "
+                                  "values increase hidden transmission that surveillance "
+                                  "won't catch.")
         asym_frac = st.slider("Asymptomatic fraction (mean)", 0.0, 0.95,
-                              float(np.mean(base_disease.asymptomatic_fraction_arr(4))), 0.05)
+                              float(np.mean(base_disease.asymptomatic_fraction_arr(4))), 0.05,
+                              help="Share of infections that never develop symptoms. A "
+                                   "higher fraction means more silent spread and fewer "
+                                   "detected and severe cases for the same number of "
+                                   "infections.")
         duration_dispersion = st.slider(
             "Stage-duration peakedness (shape)", 1.0, 10.0,
             float(base_disease.duration_dispersion), 0.5,
@@ -121,53 +158,109 @@ def build_scenario() -> ScenarioConfig:
                  "durations. Used by the agent engine.",
         )
         waning_on = st.checkbox("Waning immunity",
-                                value=base_disease.waning_immunity_days is not None)
+                                value=base_disease.waning_immunity_days is not None,
+                                help="If on, recovered and vaccinated people gradually "
+                                     "lose protection and return to susceptible. This "
+                                     "can drive repeated waves instead of a single "
+                                     "epidemic that ends in lasting immunity.")
         # `disabled=not waning_on` greys out the slider when the checkbox is off;
         # it still returns a value, but we ignore it later when waning is off.
         waning_days = st.slider("Immunity duration (days)", 30, 1000,
                                 int(base_disease.waning_immunity_days or 270), 30,
-                                disabled=not waning_on)
+                                disabled=not waning_on,
+                                help="Average days immunity lasts before a person "
+                                     "becomes susceptible again. Shorter durations "
+                                     "produce more frequent re-infection waves; longer "
+                                     "durations approach lifelong immunity.")
 
     with st.sidebar.expander("Severity (mean across ages)"):
         hosp = st.slider("Hospitalisation rate (of symptomatic)", 0.0, 0.5,
-                         float(np.mean(base_disease.hospitalization_rate_arr(4))), 0.005)
+                         float(np.mean(base_disease.hospitalization_rate_arr(4))), 0.005,
+                         help="Fraction of symptomatic cases that need hospital care. "
+                              "Scales hospital occupancy and, downstream, ICU and "
+                              "deaths. Does not change how fast the disease spreads.")
         icu = st.slider("ICU rate (of hospitalised)", 0.0, 0.8,
-                        float(np.mean(base_disease.icu_rate_arr(4))), 0.01)
+                        float(np.mean(base_disease.icu_rate_arr(4))), 0.01,
+                        help="Fraction of hospitalised patients who need intensive "
+                             "care. Drives ICU occupancy and interacts with the ICU "
+                             "capacity limit below.")
         death = st.slider("Death rate (of ICU)", 0.0, 0.9,
-                          float(np.mean(base_disease.death_rate_arr(4))), 0.01)
+                          float(np.mean(base_disease.death_rate_arr(4))), 0.01,
+                          help="Fraction of ICU patients who die. Together with the "
+                               "rates above this sets the overall infection-fatality "
+                               "ratio; it does not affect transmission.")
 
     with st.sidebar.expander("Vaccination"):
-        vacc_enabled = st.checkbox("Enable vaccination", value=False)
-        vacc_start = st.number_input("Start day", 0, 1000, 30, 5, disabled=not vacc_enabled)
+        vacc_enabled = st.checkbox("Enable vaccination", value=False,
+                                   help="Roll out vaccination during the run, moving "
+                                        "susceptible people into a protected state.")
+        vacc_start = st.number_input("Start day", 0, 1000, 30, 5, disabled=not vacc_enabled,
+                                     help="Day the campaign begins. Earlier starts blunt "
+                                          "or prevent the peak; starting after the peak "
+                                          "has little effect.")
         # Slider returns a percentage (0-3); divide by 100 to store a fraction.
         vacc_rate = st.slider("Daily coverage (% of pop/day)", 0.0, 3.0, 0.5, 0.1,
-                              disabled=not vacc_enabled) / 100.0
-        vacc_cap = st.slider("Coverage cap", 0.0, 1.0, 0.7, 0.05, disabled=not vacc_enabled)
-        ve_sus = st.slider("Efficacy vs. infection", 0.0, 1.0, 0.6, 0.05, disabled=not vacc_enabled)
-        ve_sev = st.slider("Efficacy vs. severe disease", 0.0, 1.0, 0.8, 0.05, disabled=not vacc_enabled)
+                              disabled=not vacc_enabled,
+                              help="Percent of the population vaccinated per day. Faster "
+                                   "rollout reaches protective coverage sooner and "
+                                   "flattens the curve more.") / 100.0
+        vacc_cap = st.slider("Coverage cap", 0.0, 1.0, 0.7, 0.05, disabled=not vacc_enabled,
+                             help="Maximum fraction of the population ever vaccinated "
+                                  "(an uptake ceiling). Higher caps push closer to herd "
+                                  "immunity.")
+        ve_sus = st.slider("Efficacy vs. infection", 0.0, 1.0, 0.6, 0.05, disabled=not vacc_enabled,
+                           help="How much vaccination cuts a person's chance of being "
+                                "infected (1.0 = full protection). Higher values reduce "
+                                "transmission and can stop the outbreak.")
+        ve_sev = st.slider("Efficacy vs. severe disease", 0.0, 1.0, 0.8, 0.05, disabled=not vacc_enabled,
+                           help="How much vaccination cuts hospitalisation and death "
+                                "given infection. Mainly lowers the death and ICU "
+                                "burden rather than the number of cases.")
 
     with st.sidebar.expander("Interventions (NPIs)"):
-        npi_enabled = st.checkbox("Enable an intervention window", value=False)
-        npi_start = st.number_input("NPI start day", 0, 1000, 30, 5, disabled=not npi_enabled)
-        npi_end = st.number_input("NPI end day", 1, 2000, 120, 5, disabled=not npi_enabled)
+        npi_enabled = st.checkbox("Enable an intervention window", value=False,
+                                  help="Apply a temporary transmission-reducing measure "
+                                       "(lockdown, masking, distancing) over a fixed "
+                                       "window of days.")
+        npi_start = st.number_input("NPI start day", 0, 1000, 30, 5, disabled=not npi_enabled,
+                                    help="Day the measure switches on.")
+        npi_end = st.number_input("NPI end day", 1, 2000, 120, 5, disabled=not npi_enabled,
+                                  help="Day the measure switches off. Cases often rebound "
+                                       "after the window if susceptibles remain, so a "
+                                       "short window may only delay the peak.")
         npi_reduction = st.slider("Transmission reduction", 0.0, 0.95, 0.5, 0.05,
-                                  disabled=not npi_enabled)
+                                  disabled=not npi_enabled,
+                                  help="Fraction by which transmission is cut while the "
+                                       "measure is active (0.5 = halve it). Stronger or "
+                                       "longer measures flatten the peak more, but rarely "
+                                       "shrink the final total unless sustained.")
 
     with st.sidebar.expander("Environment (seasonality & spillover)"):
-        season_on = st.checkbox("Seasonal transmission", value=False)
+        season_on = st.checkbox("Seasonal transmission", value=False,
+                                help="Make transmissibility rise and fall over the year "
+                                     "(e.g. higher in winter), which can split one "
+                                     "outbreak into recurring seasonal waves.")
         season_amp = st.slider("Seasonal swing (amplitude)", 0.0, 0.9, 0.3, 0.05,
                                disabled=not season_on,
                                help="Fraction by which transmissibility swings up/down "
-                                    "over the year. R₀ is the annual average.")
+                                    "over the year (R₀ is the annual average). Bigger "
+                                    "swings make seasonal waves more pronounced.")
         season_peak = st.number_input("Peak transmissibility day", 0, 365, 0, 5,
-                                      disabled=not season_on)
+                                      disabled=not season_on,
+                                      help="Day of the year when transmission is highest. "
+                                           "Shifts the timing of seasonal waves without "
+                                           "changing their size.")
         spillover_on = st.checkbox("External / spillover infections", value=False,
                                    help="A background infection hazard from outside the "
                                         "population (imports, or an animal reservoir). Can "
                                         "start or sustain outbreaks on its own.")
         # Slider is in cases per 100,000 susceptibles per day; convert to a rate.
         spillover_per_100k = st.slider("Spillover rate (per 100k/day)", 0.0, 50.0, 5.0, 0.5,
-                                       disabled=not spillover_on)
+                                       disabled=not spillover_on,
+                                       help="New infections seeded from outside per "
+                                            "100,000 susceptibles per day. Keeps embers "
+                                            "burning between waves and can restart an "
+                                            "outbreak even after it has faded.")
         child_susc = st.slider("Children's relative susceptibility (0-17)", 0.1, 1.5, 1.0, 0.05,
                                help="How susceptible the youngest age group is to infection, "
                                     "relative to adults (1.0 = same).")
@@ -175,18 +268,37 @@ def build_scenario() -> ScenarioConfig:
     with st.sidebar.expander("Surveillance (reported cases)"):
         st.caption("How true infections appear in case data: under-reporting and delay.")
         ascertainment = st.slider("Ascertainment (% of symptomatic reported)", 1, 100, 100, 1,
-                                  help="Fraction of symptomatic cases that get detected.") / 100.0
-        reporting_delay = st.number_input("Reporting delay (days)", 0, 30, 0, 1)
+                                  help="Fraction of symptomatic cases that get detected "
+                                       "and reported. Lower values scale the reported-case "
+                                       "curve down relative to true infections, without "
+                                       "changing the underlying epidemic.") / 100.0
+        reporting_delay = st.number_input("Reporting delay (days)", 0, 30, 0, 1,
+                                          help="Average days between symptom onset and a "
+                                               "case being reported. Shifts the reported "
+                                               "curve later than the true epidemic.")
 
     with st.sidebar.expander("Healthcare capacity"):
-        cap_enabled = st.checkbox("Limit ICU capacity", value=False)
+        cap_enabled = st.checkbox("Limit ICU capacity", value=False,
+                                  help="Cap the number of ICU beds so that patients who "
+                                       "can't get a bed face higher mortality.")
         icu_capacity = st.number_input("ICU beds", 0, 1_000_000, 500, 50,
-                                       disabled=not cap_enabled)
+                                       disabled=not cap_enabled,
+                                       help="ICU beds available. When occupancy exceeds "
+                                            "this, the excess patients are subject to the "
+                                            "overflow mortality multiplier below.")
         overflow_mult = st.slider("Overflow mortality multiplier", 1.0, 5.0, 2.0, 0.5,
-                                  disabled=not cap_enabled)
+                                  disabled=not cap_enabled,
+                                  help="How much more likely overflow ICU patients are to "
+                                       "die (2.0 = double). Models the human cost of "
+                                       "exceeding capacity; only bites once ICU demand "
+                                       "passes the bed count.")
 
     with st.sidebar.expander("Simulation controls", expanded=True):
-        duration = st.number_input("Duration (days)", 30, 2000, 365, 5)
+        duration = st.number_input("Duration (days)", 30, 2000, 365, 5,
+                                   help="How many days to simulate. Longer runs reveal "
+                                        "later waves, especially with waning immunity, "
+                                        "seasonality or spillover; they don't change the "
+                                        "first wave.")
         engine_label = st.radio(
             "Engine",
             ["Compartmental (fast)", "Agent-based (individuals)"],
@@ -216,8 +328,16 @@ def build_scenario() -> ScenarioConfig:
         if engine == "agent":
             stochastic = True
         overdispersion = st.slider("Superspreading (lower = burstier)", 0.05, 5.0, 0.5, 0.05,
-                                   disabled=not stochastic)
-        seed = st.number_input("Random seed", 0, 1_000_000, 42, 1, disabled=not stochastic)
+                                   disabled=not stochastic,
+                                   help="Dispersion of the number of people each case "
+                                        "infects. Lower values concentrate transmission "
+                                        "in a few superspreaders, making outbreaks "
+                                        "burstier and more likely to either fizzle out or "
+                                        "explode; higher values make spread more uniform.")
+        seed = st.number_input("Random seed", 0, 1_000_000, 42, 1, disabled=not stochastic,
+                               help="Fixes the random-number stream so a stochastic run "
+                                    "is reproducible. Change it to draw another equally "
+                                    "likely trajectory.")
 
     # Contact network (agent engine only). Households/schools/workplaces add
     # repeated-contact structure on top of community mixing; the relative weights
@@ -227,11 +347,23 @@ def build_scenario() -> ScenarioConfig:
         if not net_available:
             st.caption("Switch to the agent engine to enable contact networks.")
         net_enabled = st.checkbox("Enable households / schools / workplaces",
-                                  value=False, disabled=not net_available)
-        hh_w = st.slider("Household weight", 0.0, 3.0, 1.0, 0.1, disabled=not net_enabled)
-        sch_w = st.slider("School weight", 0.0, 3.0, 0.6, 0.1, disabled=not net_enabled)
-        wrk_w = st.slider("Workplace weight", 0.0, 3.0, 0.6, 0.1, disabled=not net_enabled)
-        com_w = st.slider("Community weight", 0.0, 3.0, 0.5, 0.1, disabled=not net_enabled)
+                                  value=False, disabled=not net_available,
+                                  help="Layer structured, repeated contacts on top of "
+                                       "random community mixing. This adds clustering "
+                                       "(e.g. whole households infected together) that "
+                                       "the well-mixed model can't capture.")
+        net_help = ("Relative share of contacts — and thus transmission — in this "
+                    "setting. The engine rescales transmissibility to keep R₀ fixed, so "
+                    "raising one weight concentrates spread there rather than increasing "
+                    "the overall total.")
+        hh_w = st.slider("Household weight", 0.0, 3.0, 1.0, 0.1, disabled=not net_enabled,
+                         help=net_help)
+        sch_w = st.slider("School weight", 0.0, 3.0, 0.6, 0.1, disabled=not net_enabled,
+                          help=net_help)
+        wrk_w = st.slider("Workplace weight", 0.0, 3.0, 0.6, 0.1, disabled=not net_enabled,
+                          help=net_help)
+        com_w = st.slider("Community weight", 0.0, 3.0, 0.5, 0.1, disabled=not net_enabled,
+                          help=net_help)
 
     # Only add an intervention if it's enabled and the window is non-empty.
     interventions = []

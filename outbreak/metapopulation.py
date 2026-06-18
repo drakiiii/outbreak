@@ -76,6 +76,9 @@ class MetapopulationConfig:
     #               distance (needs x/y coordinates): M[i, j] ∝ N_j / d_ij^decay.
     mobility_model: str = "uniform"
     gravity_decay: float = 2.0             # distance exponent for the gravity model
+    # If True, x/y are read as longitude/latitude (degrees) and the gravity model
+    # uses great-circle (haversine) distances in km instead of plane Euclidean.
+    geographic_coords: bool = False
     # Explicit travel: per-infectious-person daily probability of taking a trip
     # that seeds an importation in another region (discrete, stochastic). 0 = off.
     # Trip destinations follow the same mobility matrix.
@@ -116,10 +119,13 @@ class MetapopulationConfig:
         """Gravity weights M[i, j] ∝ N_j / distance(i, j)^gravity_decay."""
         coords = np.array([[r.x, r.y] for r in self.regions], dtype=float)
         pops = np.array([r.population for r in self.regions], dtype=float)
-        # Pairwise Euclidean distances; self-distance set to inf so the diagonal
-        # weight is zero, and any coincident pair is treated as unconnected.
-        diff = coords[:, None, :] - coords[None, :, :]
-        dist = np.sqrt((diff ** 2).sum(axis=-1))
+        if self.geographic_coords:
+            dist = _haversine_km(coords[:, 0], coords[:, 1])   # x=lon, y=lat (degrees)
+        else:
+            diff = coords[:, None, :] - coords[None, :, :]
+            dist = np.sqrt((diff ** 2).sum(axis=-1))           # plane Euclidean
+        # Self-distance -> inf so the diagonal weight is zero, and any coincident
+        # pair is treated as unconnected rather than dividing by zero.
         dist = np.where(dist == 0.0, np.inf, dist)
         w = pops[None, :] / np.power(dist, self.gravity_decay)   # M[i, j] ∝ N_j / d^decay
         w[~np.isfinite(w)] = 0.0
@@ -294,6 +300,7 @@ class MetapopulationSimulation:
                 "travel_rate": self.config.travel_rate,
                 "mobility_model": self.config.mobility_model,
                 "gravity_decay": self.config.gravity_decay,
+                "geographic_coords": self.config.geographic_coords,
                 "mobility": (np.asarray(self.config.mobility).tolist()
                              if self.config.mobility is not None else None),
             },
@@ -315,6 +322,7 @@ class MetapopulationSimulation:
             mobility=m.get("mobility"),
             mobility_model=m.get("mobility_model", "uniform"),
             gravity_decay=m.get("gravity_decay", 2.0),
+            geographic_coords=m.get("geographic_coords", False),
         )
         sim = cls(base, config)
         states = data["engine_states"]
@@ -329,6 +337,23 @@ class MetapopulationSimulation:
     def load(cls, path: str) -> "MetapopulationSimulation":
         with open(path, "r", encoding="utf-8") as fh:
             return cls.from_dict(json.load(fh))
+
+
+def _haversine_km(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    """Pairwise great-circle distances (km) between points given in degrees.
+
+    Returns a (K, K) matrix. The haversine formula gives the distance along the
+    Earth's surface, so it's correct near the poles and across the date line —
+    unlike treating longitude/latitude as a flat plane.
+    """
+    earth_radius_km = 6371.0
+    lon_r = np.radians(np.asarray(lon, dtype=float))
+    lat_r = np.radians(np.asarray(lat, dtype=float))
+    dlon = lon_r[:, None] - lon_r[None, :]
+    dlat = lat_r[:, None] - lat_r[None, :]
+    a = (np.sin(dlat / 2) ** 2
+         + np.cos(lat_r[:, None]) * np.cos(lat_r[None, :]) * np.sin(dlon / 2) ** 2)
+    return 2.0 * earth_radius_km * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
 
 
 # Per-step record fields that are simply summed across regions.

@@ -91,12 +91,26 @@ def _neighbour_matrix(k: int, is_neighbour) -> np.ndarray:
 # --------------------------------------------------------------------------- #
 def build_metapop():
     st.sidebar.header("🗺️ Spatial scenario")
-    preset = st.sidebar.selectbox("Disease", ["covid_like", "influenza_like", "measles_like"])
-    k = st.sidebar.slider("Number of regions", 2, 16, 6)
+    preset = st.sidebar.selectbox("Disease", ["covid_like", "influenza_like", "measles_like"],
+                                  help="Disease biology used within every region. A more "
+                                       "transmissible disease both peaks higher locally "
+                                       "and arrives in distant regions sooner.")
+    k = st.sidebar.slider("Number of regions", 2, 16, 6,
+                          help="How many coupled regions to simulate. More regions create "
+                               "a longer chain for the epidemic to travel along, so the "
+                               "last region's outbreak arrives later.")
     layout = st.sidebar.selectbox(
-        "Layout", ["Line", "Ring", "Grid", "Random (all-to-all)", "World cities (map)"])
-    pop = st.sidebar.number_input("Population per region", 10_000, 2_000_000, 100_000, 10_000)
-    duration = st.sidebar.slider("Duration (days)", 60, 730, 300, 10)
+        "Layout", ["Line", "Ring", "Grid", "Random (all-to-all)", "World cities (map)"],
+        help="Spatial arrangement of the regions and which ones are connected by "
+             "default. Line/Ring/Grid only link neighbours (so spread is a wave); "
+             "Random connects everything; World cities places them on a real map.")
+    pop = st.sidebar.number_input("Population per region", 10_000, 2_000_000, 100_000, 10_000,
+                                  help="People in each region. Larger populations sustain "
+                                       "bigger local outbreaks and are less likely to fade "
+                                       "out before the wave arrives.")
+    duration = st.sidebar.slider("Duration (days)", 60, 730, 300, 10,
+                                 help="Days to simulate. Allow enough time for the wave to "
+                                      "reach the farthest region.")
 
     st.sidebar.subheader("Spread between regions")
     mobility_choice = st.sidebar.radio(
@@ -105,13 +119,25 @@ def build_metapop():
         help="How regions are connected. Gravity: flow grows with a region's "
              "population and falls with distance.")
     gravity_decay = st.sidebar.slider("Gravity distance decay", 1.0, 4.0, 2.0, 0.5,
-                                      disabled=mobility_choice == "Layout default")
+                                      disabled=mobility_choice == "Layout default",
+                                      help="How sharply travel falls off with distance. "
+                                           "Higher values keep spread between nearby "
+                                           "regions (a slow, local wave); lower values let "
+                                           "the epidemic jump to far-off regions sooner.")
     coupling = st.sidebar.slider("Prevalence coupling", 0.0, 0.1, 0.0, 0.005,
-                                 help="Smooth, mean-field leakage between connected regions.")
+                                 help="Smooth, mean-field leakage of infection between "
+                                      "connected regions. Higher values synchronise the "
+                                      "regions so their outbreaks rise and fall together "
+                                      "instead of in a staggered wave.")
     travel_rate = st.sidebar.slider("Explicit travel rate", 0.0, 0.02, 0.004, 0.001,
                                     help="Per-infectious-person daily chance of a trip that "
-                                         "seeds an importation in a connected region.")
-    seed = st.sidebar.number_input("Random seed", 0, 1_000_000, 0, 1)
+                                         "seeds an importation in a connected region. "
+                                         "Higher rates make the epidemic reach new regions "
+                                         "sooner.")
+    seed = st.sidebar.number_input("Random seed", 0, 1_000_000, 0, 1,
+                                   help="Fixes the random-number stream so a run is "
+                                        "reproducible. Change it to draw another equally "
+                                        "likely trajectory.")
 
     coords, layout_mobility, names, geographic = build_layout(layout, k)
     k = len(names)          # world layout may cap k to the city list
@@ -132,7 +158,8 @@ def build_metapop():
     else:
         config = MetapopulationConfig(regions=regions, coupling=coupling,
                                       travel_rate=travel_rate, mobility=None,
-                                      mobility_model="gravity", gravity_decay=gravity_decay)
+                                      mobility_model="gravity", gravity_decay=gravity_decay,
+                                      geographic_coords=geographic)  # great-circle on a real map
     return base.validate(), config.validate(), int(seed), geographic
 
 
@@ -146,7 +173,8 @@ def run_metapop(base_dict, config_dict, seed):
                                   travel_rate=config_dict["travel_rate"],
                                   mobility=config_dict["mobility"],
                                   mobility_model=config_dict["mobility_model"],
-                                  gravity_decay=config_dict["gravity_decay"])
+                                  gravity_decay=config_dict["gravity_decay"],
+                                  geographic_coords=config_dict["geographic_coords"])
     sim = MetapopulationSimulation(base, config, base_seed=seed)
     sim.run_to_end()
 
@@ -249,6 +277,7 @@ def main():
         "coupling": config.coupling, "travel_rate": config.travel_rate,
         "mobility": (np.asarray(config.mobility).tolist() if config.mobility is not None else None),
         "mobility_model": config.mobility_model, "gravity_decay": config.gravity_decay,
+        "geographic_coords": config.geographic_coords,
     }
     (prevalence, days, combined_infectious, arrivals,
      coords, pops, names, mob) = run_metapop(base_dict, config_dict, seed)

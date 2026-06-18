@@ -228,6 +228,43 @@ def test_invalid_mobility_model_rejected():
                              gravity_decay=0.0).validate()
 
 
+# ----------------------------------------------------- great-circle distances
+def test_haversine_distance_is_realistic():
+    from outbreak.metapopulation import _haversine_km
+    # Tokyo and Los Angeles, across the Pacific (~8,800 km in reality).
+    d = _haversine_km(np.array([139.69, -118.24]), np.array([35.69, 34.05]))
+    assert d[0, 1] == pytest.approx(8800, rel=0.05)
+    assert np.allclose(np.diag(d), 0.0)               # zero distance to self
+
+
+def test_geographic_gravity_uses_great_circle():
+    # London, Paris (near), Tokyo (far but huge population). Great-circle distance
+    # must keep nearby Paris far more connected than distant Tokyo.
+    cities = [Region("London", 9_000_000, 50, x=-0.13, y=51.51),
+              Region("Paris", 2_000_000, 0, x=2.35, y=48.85),
+              Region("Tokyo", 14_000_000, 0, x=139.69, y=35.69)]
+    geo = MetapopulationConfig(cities, mobility_model="gravity",
+                               geographic_coords=True).mobility_matrix()
+    assert geo[0, 1] > geo[0, 2]                      # London -> Paris >> London -> Tokyo
+    assert np.allclose(geo.sum(axis=1), 1.0)
+
+
+def test_geographic_coords_survive_save_load(tmp_path):
+    cities = [Region("A", 100_000, 50, x=-0.13, y=51.51),
+              Region("B", 100_000, 0, x=2.35, y=48.85)]
+    base = _base(days=30)
+    sim = MetapopulationSimulation(
+        base, MetapopulationConfig(cities, travel_rate=0.01, mobility_model="gravity",
+                                   geographic_coords=True), base_seed=0)
+    for _ in range(10):
+        sim.step()
+    path = tmp_path / "geo.json"
+    sim.save(str(path))
+    restored = MetapopulationSimulation.load(str(path))
+    assert restored.config.geographic_coords is True
+    assert restored.config.mobility_model == "gravity"
+
+
 # ----------------------------------------------------------------- validation
 def test_validation():
     with pytest.raises(ValueError):
