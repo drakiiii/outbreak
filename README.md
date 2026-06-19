@@ -128,9 +128,9 @@ JavaScript port of the compartmental engine — entirely on your device, no serv
 and no Python. Open `web/index.html` (or serve the folder with
 `python3 -m http.server` and visit it) to set R₀, roll out a vaccine, impose a
 lockdown, cap ICU beds and add seasonality, then watch the epidemic curve,
-live Rₜ and headline stats respond. It's also published via GitHub Pages from the
-`web/` folder, and embedded in the [drakiiii/uix](https://github.com/drakiiii/uix)
-portfolio. The agent-based and metapopulation engines below remain Python-only.
+live Rₜ and headline stats respond. The same simulator is embedded in the
+[drakiiii/uix](https://github.com/drakiiii/uix) portfolio. The agent-based and
+metapopulation engines below remain Python-only.
 
 ## The easy way: the interactive app
 

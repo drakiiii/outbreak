@@ -5,15 +5,23 @@ name: security
 #                  (eval/exec, subprocess, unsafe deserialisation, ...).
 #   * pip-audit  — checks the pinned dependencies against known-vulnerability
 #                  databases (CVEs / the Python advisory DB).
-# Runs on every push and pull request, and on a weekly schedule so newly
-# disclosed dependency vulnerabilities are caught even when the code is idle.
+# Runs on every pull request and push to main, and on a weekly schedule so
+# newly disclosed dependency vulnerabilities are caught even when code is idle.
 
 on:
   push:
+    branches: [main]
   pull_request:
   schedule:
     - cron: "0 6 * * 1"   # every Monday at 06:00 UTC
   workflow_dispatch:        # allow manual runs from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   static-analysis:
@@ -24,6 +32,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - run: pip install bandit
       # Fail the build only on medium+ severity AND confidence findings, so CI
       # flags genuine issues (e.g. an introduced eval/subprocess) without
@@ -38,6 +47,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - run: pip install pip-audit
       # Audit the exact pinned versions in the lockfile. pip-audit exits
       # non-zero when a known vulnerability is found, failing the build.
