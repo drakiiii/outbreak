@@ -1,0 +1,14 @@
+# Keeps dependencies and workflow actions patched. Dependabot opens update PRs
+# (which the tests + security workflows then check) and security-fix PRs for any
+# advisories that affect this repo.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

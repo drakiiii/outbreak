@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0c0d" />
+  <meta name="description" content="An interactive, age-structured SEIR epidemic simulator that runs entirely in your browser." />
+  <title>Outbreak — Epidemic Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=Inter:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦠</text></svg>" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="head">
+      <p class="head__eyebrow"><span class="dot"></span> Computational epidemiology · runs on your device</p>
+      <h1>Outbreak — <em>epidemic</em> simulator</h1>
+      <p>
+        A browser port of this project's age-structured, stochastic SEIR engine.
+        Set the disease, then layer on vaccination, lockdowns, ICU capacity and
+        seasonality and watch the epidemic curve respond. Transmission is calibrated
+        from the next-generation matrix to hit your target <code>R₀</code>; every run
+        reports the effective reproduction number <code>Rₜ</code>, hospital and ICU
+        burden, attack rate and deaths.
+      </p>
+    </header>
+
+    <div class="panel-grid">
+      <!-- CONTROLS -->
+      <div>
+        <div class="card">
+          <div class="card__title">Disease</div>
+          <div class="field">
+            <label class="field__label" for="ob-preset">Preset</label>
+            <select id="ob-preset"></select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="ob-r0">Basic reproduction R₀ <span class="val" id="ob-r0-val">2.8</span></label>
+            <input type="range" id="ob-r0" min="0.5" max="18" step="0.1" value="2.8" />
+            <p class="field__hint">How many people one case infects in a fully susceptible population.</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="ob-inf">Initial infections <span class="val" id="ob-inf-val">20</span></label>
+            <input type="range" id="ob-inf" min="1" max="500" step="1" value="20" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Population &amp; run</div>
+          <div class="field">
+            <label class="field__label" for="ob-pop">Population</label>
+            <select id="ob-pop">
+              <option value="100000">100,000</option>
+              <option value="1000000" selected>1,000,000</option>
+              <option value="10000000">10,000,000</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="ob-duration">Duration <span class="val" id="ob-duration-val">300 d</span></label>
+            <input type="range" id="ob-duration" min="60" max="720" step="10" value="300" />
+          </div>
+          <div class="field toggle-row">
+            <span class="field__label" style="margin:0">Stochastic</span>
+            <label class="switch"><input type="checkbox" id="ob-stoch" checked /><span class="track"></span></label>
+          </div>
+          <div class="field">
+            <label class="field__label" for="ob-seed">Seed <span class="val">optional</span></label>
+            <input type="text" id="ob-seed" placeholder="random" inputmode="numeric" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Vaccination</div>
+          <div class="toggle-row">
+            <span class="field__label" style="margin:0">Roll out a vaccine</span>
+            <label class="switch"><input type="checkbox" id="ob-vax" /><span class="track"></span></label>
+          </div>
+          <div class="collapse" id="ob-vax-opts">
+            <div class="field">
+              <label class="field__label" for="ob-vax-start">Start <span class="val" id="ob-vax-start-val">day 30</span></label>
+              <input type="range" id="ob-vax-start" min="0" max="200" step="5" value="30" />
+            </div>
+            <div class="field">
+              <label class="field__label" for="ob-vax-rate">Daily rate <span class="val" id="ob-vax-rate-val">0.5%/d</span></label>
+              <input type="range" id="ob-vax-rate" min="0.1" max="3" step="0.1" value="0.5" />
+            </div>
+            <div class="field">
+              <label class="field__label" for="ob-vax-cov">Coverage cap <span class="val" id="ob-vax-cov-val">70%</span></label>
+              <input type="range" id="ob-vax-cov" min="10" max="95" step="5" value="70" />
+              <p class="field__hint">Leaky vaccine: cuts susceptibility, severity and onward transmission. Oldest groups first.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Intervention</div>
+          <div class="toggle-row">
+            <span class="field__label" style="margin:0">Lockdown / distancing</span>
+            <label class="switch"><input type="checkbox" id="ob-npi" /><span class="track"></span></label>
+          </div>
+          <div class="collapse" id="ob-npi-opts">
+            <div class="field">
+              <label class="field__label" for="ob-npi-start">Start <span class="val" id="ob-npi-start-val">day 40</span></label>
+              <input type="range" id="ob-npi-start" min="0" max="300" step="5" value="40" />
+            </div>
+            <div class="field">
+              <label class="field__label" for="ob-npi-len">Length <span class="val" id="ob-npi-len-val">60 d</span></label>
+              <input type="range" id="ob-npi-len" min="10" max="240" step="10" value="60" />
+            </div>
+            <div class="field">
+              <label class="field__label" for="ob-npi-red">Transmission cut <span class="val" id="ob-npi-red-val">50%</span></label>
+              <input type="range" id="ob-npi-red" min="10" max="90" step="5" value="50" />
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Healthcare &amp; environment</div>
+          <div class="toggle-row">
+            <span class="field__label" style="margin:0">Limit ICU capacity</span>
+            <label class="switch"><input type="checkbox" id="ob-icu" /><span class="track"></span></label>
+          </div>
+          <div class="collapse" id="ob-icu-opts">
+            <div class="field">
+              <label class="field__label" for="ob-icu-cap">ICU beds <span class="val" id="ob-icu-cap-val">10 / 100k</span></label>
+              <input type="range" id="ob-icu-cap" min="2" max="60" step="1" value="10" />
+              <p class="field__hint">Patients who can't get a bed face elevated mortality.</p>
+            </div>
+          </div>
+          <div class="field" style="margin-top:1.1rem">
+            <label class="field__label" for="ob-season">Seasonality <span class="val" id="ob-season-val">0%</span></label>
+            <input type="range" id="ob-season" min="0" max="60" step="5" value="0" />
+            <p class="field__hint">Yearly swing in transmissibility around the calibrated average.</p>
+          </div>
+        </div>
+
+        <button class="btn btn--primary btn--block" id="ob-run" style="margin-top:0.4rem">Run simulation</button>
+      </div>
+
+      <!-- OUTPUT -->
+      <div>
+        <div class="card">
+          <div class="card__title">Epidemic curve</div>
+          <div class="chart-wrap"><canvas id="ob-chart"></canvas></div>
+          <div class="legend" id="ob-legend"></div>
+          <div class="scrubber">
+            <div class="scrubber__head">
+              <span class="scrubber__day" id="ob-day">Day 0</span>
+              <span class="scrubber__read" id="ob-read"></span>
+            </div>
+            <input type="range" id="ob-scrub" min="0" max="0" value="0" step="1" />
+            <div class="btn-row" style="margin-top:0.8rem">
+              <button class="btn" id="ob-play" disabled>▶ Play</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card__title">Headline results</div>
+          <div class="stat-grid" id="ob-stats"></div>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Age-structured stochastic SEIR · calibrated to R₀ via the next-generation matrix.<br />
+      Runs entirely on your device — nothing is sent anywhere. The full Python engine
+      (agent-based and metapopulation modes, fitting, CLI and dashboards) lives in this repository.
+    </footer>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

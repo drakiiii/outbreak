@@ -1,11 +1,20 @@
 name: tests
 
-# Runs the automated test suite on every push and pull request, across the
-# supported Python versions, so regressions are caught early.
+# Runs the automated test suite on every pull request (and pushes to main),
+# across the supported Python versions, so regressions are caught early.
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+# Cancel an in-progress run when new commits are pushed to the same ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -19,6 +28,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
       - run: pytest -q
