@@ -5,7 +5,7 @@ scipy>=1.10
 # Interactive UI
 streamlit>=1.30
 plotly>=5.18
-pandas>=2.0
+pandas>=2.3.3
 
 # Development / testing
 pytest>=7.0
