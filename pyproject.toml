@@ -7,7 +7,7 @@ name = "outbreak"
 version = "0.1.0"
 description = "Realistic, age-structured stochastic SEIR epidemic simulator with an interactive UI"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Outbreak contributors" }]
 keywords = ["epidemiology", "SEIR", "simulation", "compartmental-model", "agent"]
