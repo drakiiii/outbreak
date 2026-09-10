@@ -13,7 +13,7 @@ authors = [{ name = "Outbreak contributors" }]
 keywords = ["epidemiology", "SEIR", "simulation", "compartmental-model", "agent"]
 dependencies = [
     "numpy>=1.24",
-    "scipy>=1.10",
+    "scipy>=1.15.3",
 ]
 
 [project.optional-dependencies]
