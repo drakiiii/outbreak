@@ -3,7 +3,7 @@ numpy>=1.24
 scipy>=1.10
 
 # Interactive UI
-streamlit>=1.30
+streamlit>=1.58.0
 plotly>=5.18
 pandas>=2.3.3
 
