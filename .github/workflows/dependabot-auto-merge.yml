@@ -28,15 +28,19 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Approve and enable auto-merge
+      # This deliberately does NOT approve the PR. GitHub blocks workflows from
+      # approving pull requests ("GitHub Actions is not permitted to approve pull
+      # requests") unless the repository opts in, and that block is a real
+      # guardrail: it stops a compromised workflow from approving and merging its
+      # own code. The approval is not needed to merge unless a ruleset demands a
+      # reviewer, so the step is dropped rather than the guardrail.
+      - name: Enable auto-merge
         # Patch/minor (any ecosystem), or any GitHub Actions version bump.
         if: >-
           steps.meta.outputs.update-type == 'version-update:semver-patch' ||
           steps.meta.outputs.update-type == 'version-update:semver-minor' ||
           contains(steps.meta.outputs.package-ecosystem, 'github')
-        run: |
-          gh pr review --approve "$PR_URL"
-          gh pr merge --auto --squash "$PR_URL"
+        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
