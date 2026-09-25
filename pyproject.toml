@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.58.0", "plotly>=5.18", "pandas>=2.3.3"]
+ui = ["streamlit>=1.64.0", "plotly>=5.18", "pandas>=2.3.3"]
 dev = ["pytest>=9.1.1", "bandit>=1.9.4", "pip-audit>=2.9.0"]
 
 # Installs an `outbreak` command on the PATH (pip install -e .) that calls
