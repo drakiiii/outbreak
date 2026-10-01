@@ -1,10 +1,34 @@
 name: Dependabot auto-merge
 
-# Approves and enables auto-merge for Dependabot PRs so they merge themselves
-# once CI passes. Scope: patch/minor updates (any ecosystem) plus GitHub Actions
-# version bumps; major updates to libraries are left for manual review.
+# Enables auto-merge on Dependabot PRs so they merge themselves once CI passes.
+# Scope: patch/minor updates (any ecosystem) plus GitHub Actions version bumps;
+# major updates to libraries are left for manual review.
 #
-# Requires two one-time repository settings:
+# IT HAS NEVER MERGED ANYTHING. Read this before trusting it.
+#
+# Every Dependabot PR this repository has ever merged was merged by a human.
+# Checked on 1 October 2026 across the five open at the time (#32, #33, #34,
+# #38, #39) and the nine already merged: the job runs, the step below succeeds,
+# `gh pr merge --auto` arms auto-merge, all six checks on the PR go green —
+# `test (3.10)`, `test (3.11)`, `test (3.12)`, `bandit`, `pip-audit`,
+# `auto-merge` — and the API still reports the PR as `mergeable_state: blocked`
+# until somebody merges it by hand. Oldest of the five had been sitting three
+# weeks.
+#
+# So a rule on `main` requires something these PRs never receive, and the
+# arming is theatre until it is satisfiable. Two candidates, both under
+# Settings -> Rules, neither visible through the REST API:
+#   * A required approving review. Dependabot cannot approve its own PR and
+#     Actions is barred from approving (see the note on the step below), so
+#     nothing can ever satisfy it unattended.
+#   * A required status check whose name no longer reports — a `test (3.9)`
+#     left from when the matrix included 3.9, say. The matrix is 3.10-3.12
+#     now, so such a check would never arrive and would block every PR for
+#     good.
+# Whichever it is, this workflow starts working the moment it is satisfiable;
+# there is nothing to change here.
+#
+# Also requires, and these are genuinely set:
 #   * Settings -> General -> "Allow auto-merge" = on.
 #   * A branch ruleset / protection on `main` that requires the CI checks, so
 #     auto-merge only fires once those checks are green. Without it, auto-merge
