@@ -10,8 +10,8 @@ name: Dependabot auto-merge
 # Checked on 1 October 2026 across the five open at the time (#32, #33, #34,
 # #38, #39) and the nine already merged: the job runs, the step below succeeds,
 # `gh pr merge --auto` arms auto-merge, all six checks on the PR go green —
-# `test (3.10)`, `test (3.11)`, `test (3.12)`, `bandit`, `pip-audit`,
-# `auto-merge` — and the API still reports the PR as `mergeable_state: blocked`
+# `test (3.11)`, `test (3.12)`, `bandit`, `pip-audit`, `auto-merge` (the matrix
+# also ran 3.10 then) — and the API still reports it as `mergeable_state: blocked`
 # until somebody merges it by hand. Oldest of the five had been sitting three
 # weeks.
 #
@@ -22,9 +22,11 @@ name: Dependabot auto-merge
 #     Actions is barred from approving (see the note on the step below), so
 #     nothing can ever satisfy it unattended.
 #   * A required status check whose name no longer reports — a `test (3.9)`
-#     left from when the matrix included 3.9, say. The matrix is 3.10-3.12
+#     left from when the matrix included 3.9, say. The matrix is 3.11-3.12
 #     now, so such a check would never arrive and would block every PR for
-#     good.
+#     good. Note that dropping a version from the matrix retires a check name:
+#     if the rule names `test (3.10)`, it became unsatisfiable when 3.10 left
+#     the matrix in the streamlit 1.66 upgrade.
 # Whichever it is, this workflow starts working the moment it is satisfiable;
 # there is nothing to change here.
 #
