@@ -7,7 +7,7 @@ name = "outbreak"
 version = "0.1.0"
 description = "Realistic, age-structured stochastic SEIR epidemic simulator with an interactive UI"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Outbreak contributors" }]
 keywords = ["epidemiology", "SEIR", "simulation", "compartmental-model", "agent"]
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.64.0", "plotly>=7.1.0", "pandas>=2.3.3"]
+ui = ["streamlit>=1.66.1", "plotly>=7.1.0", "pandas>=2.3.3"]
 dev = ["pytest>=9.1.1", "bandit>=1.9.4", "pip-audit>=2.10.1"]
 
 # Installs an `outbreak` command on the PATH (pip install -e .) that calls

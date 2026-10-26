@@ -117,7 +117,7 @@ pip install --require-hashes -r requirements.lock
 (`requirements.txt` is the easy everyday list; `requirements.lock` is the strict,
 exact one — see [SECURITY.md](SECURITY.md) for why that matters.)
 
-Python 3.9 or newer is required.
+Python 3.11 or newer is required.
 
 ---
 
