@@ -1,5 +1,5 @@
 # Core engine
-numpy>=2.2.6
+numpy>=2.4.6
 scipy>=1.15.3
 
 # Interactive UI
