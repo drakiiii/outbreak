@@ -8,4 +8,4 @@ plotly>=7.1.0
 pandas>=2.3.3
 
 # Development / testing
-pytest>=9.1.1
+pytest>=9.2.0
